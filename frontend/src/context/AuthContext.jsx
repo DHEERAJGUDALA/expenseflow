@@ -2,71 +2,158 @@ import {
   createContext,
   useContext,
   useEffect,
-  useState
+  useState,
+  useCallback
 } from "react";
 import { getEmailRedirectUrl, normalizeEmail } from "../lib/auth";
 import { supabase } from "../lib/supabase";
 
 const AuthContext = createContext(null);
 
+// API base URL for direct calls
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3000/api";
+
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(null);
   const [user, setUser] = useState(null);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
 
+  /**
+   * Fetch user profile from database
+   * This is the single source of truth for role
+   */
+  const fetchProfile = useCallback(async (authUser) => {
+    if (!authUser) return null;
+    
+    try {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("role, full_name, company_id, job_title")
+        .eq("id", authUser.id)
+        .maybeSingle();
+
+      if (error) {
+        console.warn("[Auth] Profile fetch error:", error.message);
+        return null;
+      }
+      
+      return data;
+    } catch (err) {
+      console.warn("[Auth] Profile fetch exception:", err.message);
+      return null;
+    }
+  }, []);
+
+  /**
+   * Setup company for new admin signup
+   * Creates company + profile with admin role
+   */
+  const setupCompanyForNewUser = useCallback(async (authUser) => {
+    if (!authUser?.user_metadata?.organization_name) {
+      console.log("[Auth] No organization_name in metadata, skipping company setup");
+      return false;
+    }
+
+    try {
+      const { data: { session: currentSession } } = await supabase.auth.getSession();
+      if (!currentSession?.access_token) {
+        console.warn("[Auth] No session for company setup");
+        return false;
+      }
+
+      console.log("[Auth] Setting up company for new admin...");
+      
+      const response = await fetch(`${API_BASE_URL}/companies/setup`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${currentSession.access_token}`
+        },
+        body: JSON.stringify({
+          organizationName: authUser.user_metadata.organization_name,
+          country: authUser.user_metadata.country || "India",
+          currencyCode: authUser.user_metadata.currency_code || "INR",
+          currencySymbol: authUser.user_metadata.currency_symbol || "₹"
+        })
+      });
+
+      const result = await response.json();
+      
+      if (!response.ok) {
+        // User already has a company - this is fine
+        if (result.company_id) {
+          console.log("[Auth] User already has company:", result.company_id);
+          return true;
+        }
+        console.error("[Auth] Company setup failed:", result.error);
+        return false;
+      }
+
+      console.log("[Auth] Company created successfully:", result.company?.name);
+      return true;
+    } catch (err) {
+      console.error("[Auth] Company setup exception:", err.message);
+      return false;
+    }
+  }, []);
+
+  /**
+   * Resolve user with profile data
+   * If profile doesn't exist and user has organization_name, create company first
+   */
   async function resolveUser(authUser) {
     if (!authUser) {
       setUser(null);
       return;
     }
 
-    // Always fetch role from profiles — it is the single source of truth
-    try {
-      const fetchProfile = supabase
-        .from("profiles")
-        .select("role, full_name, company_id, job_title")
-        .eq("id", authUser.id)
-        .maybeSingle();
+    console.log("[Auth] Resolving user:", authUser.email);
 
-      const timeout = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Profile fetch timed out after 5s")), 5000)
-      );
-
-      const { data, error } = await Promise.race([fetchProfile, timeout]);
-
-      if (error) {
-        console.warn("[Auth] Profile fetch error:", error.message);
+    // First, try to fetch existing profile
+    let profile = await fetchProfile(authUser);
+    
+    // If no profile and user has organization_name metadata (new admin signup),
+    // call the company setup endpoint to create company + profile
+    if (!profile && authUser.user_metadata?.organization_name) {
+      console.log("[Auth] No profile found, attempting company setup for new admin...");
+      const setupSuccess = await setupCompanyForNewUser(authUser);
+      
+      if (setupSuccess) {
+        // Wait a bit for database to settle, then re-fetch profile
+        await new Promise(resolve => setTimeout(resolve, 500));
+        profile = await fetchProfile(authUser);
+        console.log("[Auth] Profile after setup:", profile);
       }
-
-      console.log("[Auth] Raw DB data:", data);
-      console.log("[Auth] Role from DB:", data?.role);
-
-      const resolvedUser = {
-        id: authUser.id,
-        email: authUser.email,
-        role: data?.role ?? "employee",
-        full_name: data?.full_name ?? authUser.user_metadata?.full_name ?? authUser.email,
-        company_id: data?.company_id ?? null,
-        job_title: data?.job_title ?? null,
-        user_metadata: authUser.user_metadata,
-      };
-
-      console.log("[Auth] Final user object:", { role: resolvedUser.role, email: resolvedUser.email });
-      setUser(resolvedUser);
-    } catch (err) {
-      console.warn("[Auth] Profile fetch exception:", err.message);
-      // Fallback — let user in with basic info, role defaults to employee
-      setUser({
-        id: authUser.id,
-        email: authUser.email,
-        role: "employee",
-        full_name: authUser.user_metadata?.full_name ?? authUser.email,
-        company_id: null,
-        job_title: null,
-        user_metadata: authUser.user_metadata,
-      });
     }
+
+    console.log("[Auth] Raw DB profile:", profile);
+    console.log("[Auth] Role from DB:", profile?.role);
+
+    const resolvedUser = {
+      id: authUser.id,
+      email: authUser.email,
+      role: profile?.role ?? authUser.user_metadata?.role ?? "employee",
+      full_name: profile?.full_name ?? authUser.user_metadata?.full_name ?? authUser.email,
+      company_id: profile?.company_id ?? null,
+      job_title: profile?.job_title ?? null,
+      user_metadata: authUser.user_metadata,
+    };
+
+    console.log("[Auth] Final user object:", { role: resolvedUser.role, email: resolvedUser.email });
+    setUser(resolvedUser);
   }
+
+  /**
+   * Refresh user profile from database
+   * Call this after role changes or when role seems stale
+   */
+  const refreshProfile = useCallback(async () => {
+    const { data: { session: currentSession } } = await supabase.auth.getSession();
+    if (currentSession?.user) {
+      console.log("[Auth] Refreshing profile...");
+      await resolveUser(currentSession.user);
+    }
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -97,6 +184,7 @@ export function AuthProvider({ children }) {
     const {
       data: { subscription }
     } = supabase.auth.onAuthStateChange(async (_event, nextSession) => {
+      console.log("[Auth] Auth state changed:", _event);
       try {
         setSession(nextSession);
         await resolveUser(nextSession?.user ?? null);
@@ -117,6 +205,7 @@ export function AuthProvider({ children }) {
     session,
     user,
     isBootstrapping,
+    refreshProfile, // Expose profile refresh function
     signIn: async ({ email, password }) =>
       supabase.auth.signInWithPassword({
         email: normalizeEmail(email),

@@ -104,13 +104,31 @@ export function ExpenseFormPage() {
   useEffect(() => {
     const fetchConversion = async () => {
       const amount = parseFloat(formData.amount);
-      if (!amount || amount <= 0 || formData.currency_code === companyCurrency.code) {
+      if (!amount || amount <= 0 || isNaN(amount) || formData.currency_code === companyCurrency.code) {
         setConversionPreview(null); return;
       }
       setLoadingConversion(true); setConversionError(null);
       try {
         const res = await expenseApi.getConversion(formData.currency_code, companyCurrency.code, amount);
-        setConversionPreview({ ...res, originalCurrency: formData.currency_code, convertedCurrency: companyCurrency.code });
+        // Validate numeric fields before setting state
+        const safeOriginal = parseFloat(res.original_amount ?? res.originalAmount ?? amount);
+        const safeConverted = parseFloat(res.converted_amount ?? res.convertedAmount);
+        
+        if (isNaN(safeOriginal) || isNaN(safeConverted)) {
+          setConversionError("Invalid conversion data received.");
+          setConversionPreview(null);
+          return;
+        }
+        
+        setConversionPreview({ 
+          ...res, 
+          originalAmount: safeOriginal,
+          convertedAmount: safeConverted,
+          fromSymbol: res.from_symbol ?? res.fromSymbol ?? '',
+          toSymbol: res.to_symbol ?? res.toSymbol ?? '',
+          originalCurrency: formData.currency_code, 
+          convertedCurrency: companyCurrency.code 
+        });
       } catch (err) {
         setConversionError("Unable to fetch conversion rate."); setConversionPreview(null);
       } finally { setLoadingConversion(false); }
@@ -154,9 +172,17 @@ export function ExpenseFormPage() {
       const result = await ocrApi.scan(receiptPreview);
       if (result.success && result.data) {
         setOcrResult(result.data); setReceiptUrl(receiptPreview);
+        
+        // Safe number parser - returns empty string if invalid
+        const safeAmount = (val) => {
+          if (val == null) return '';
+          const n = parseFloat(val);
+          return isNaN(n) || !isFinite(n) ? '' : n.toString();
+        };
+        
         setFormData(prev => ({
           ...prev,
-          amount: result.data.amount?.toString() || prev.amount,
+          amount: safeAmount(result.data.amount) || prev.amount,
           currency_code: result.data.currency || prev.currency_code,
           category: result.data.category || prev.category,
           description: result.data.description || prev.description,
@@ -288,7 +314,7 @@ export function ExpenseFormPage() {
                 </div>
               </div>
 
-              {conversionPreview && formData.amount && (
+              {conversionPreview && formData.amount && conversionPreview.originalAmount != null && conversionPreview.convertedAmount != null && (
                 <div className="alert bg-slate-50 border-slate-200">
                   <div className="flex-1">
                     <div className="flex justify-between items-center mb-1">
@@ -296,9 +322,9 @@ export function ExpenseFormPage() {
                       {loadingConversion && <Loader2 size={12} className="animate-spin text-slate-400" />}
                     </div>
                     <div className="flex items-center gap-3 text-sm">
-                      <span className="font-bold">{conversionPreview.fromSymbol}{conversionPreview.originalAmount.toFixed(2)}</span>
+                      <span className="font-bold">{conversionPreview.fromSymbol || ''}{Number(conversionPreview.originalAmount).toFixed(2)}</span>
                       <ArrowRight size={14} className="text-slate-400" />
-                      <span className="font-bold text-indigo-600">{conversionPreview.toSymbol}{conversionPreview.convertedAmount.toFixed(2)}</span>
+                      <span className="font-bold text-indigo-600">{conversionPreview.toSymbol || ''}{Number(conversionPreview.convertedAmount).toFixed(2)}</span>
                     </div>
                   </div>
                 </div>

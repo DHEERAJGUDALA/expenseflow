@@ -7,22 +7,32 @@ import { getApplicableRule } from "../services/approvalWorkflowEngine.js";
  */
 export async function getApprovalPreview(req, res) {
   try {
-    const userId = req.user.id;
+    const userId = req.user?.id;
+    
+    if (!userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
     const { amount, category } = req.query;
 
+    // Validate required parameters
     if (!amount || !category) {
       return res.status(400).json({ error: "amount and category are required" });
     }
 
+    // Parse and validate amount
     const parsedAmount = parseFloat(amount);
     if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
       return res.status(400).json({ error: "amount must be a positive number" });
     }
 
-    // Admins cannot submit
+    // Normalize category (handle case mismatch)
+    const normalizedCategory = category.toLowerCase();
+
+    // Get user profile with company_id
     const { data: profile, error: profileError } = await supabase
       .from("profiles")
-      .select("id, role")
+      .select("id, role, company_id, manager_id")
       .eq("id", userId)
       .single();
 
@@ -30,6 +40,12 @@ export async function getApprovalPreview(req, res) {
       return res.status(404).json({ error: "User profile not found" });
     }
 
+    // Check company_id is present
+    if (!profile.company_id) {
+      return res.status(400).json({ error: "User has no company assigned" });
+    }
+
+    // Admins cannot submit
     if (profile.role === "admin") {
       return res.json({
         can_submit: false,
@@ -40,7 +56,41 @@ export async function getApprovalPreview(req, res) {
       });
     }
 
-    const rule = await getApplicableRule(userId, parsedAmount, category);
+    // Get applicable rule - wrap in try/catch for safety
+    let rule;
+    try {
+      rule = await getApplicableRule(userId, parsedAmount, normalizedCategory);
+    } catch (ruleError) {
+      console.error("Error getting applicable rule:", ruleError);
+      // Return graceful fallback - no rule found
+      return res.json({
+        can_submit: true,
+        rule: null,
+        message: ruleError.message || "No approval rule configured for this expense",
+        approval_steps: profile.manager_id ? [{
+          step_order: 1,
+          approver_id: profile.manager_id,
+          approver_name: "Your Manager",
+          approver_role: "manager",
+          type: "SEQUENTIAL",
+          estimated_days: 3
+        }] : [],
+        total_steps: profile.manager_id ? 1 : 0,
+        estimated_days: profile.manager_id ? 3 : 0
+      });
+    }
+
+    // Handle null/undefined rule
+    if (!rule) {
+      return res.json({
+        can_submit: true,
+        rule: null,
+        message: "No approval rule configured for this company",
+        approval_steps: [],
+        total_steps: 0,
+        estimated_days: 0
+      });
+    }
 
     // Simple manager fallback
     if (rule.useSimpleApproval) {

@@ -75,10 +75,13 @@ export async function getApplicableRule(employeeId, expenseAmount, expenseCatego
   // ═══════════════════════════════════════════════════════════════
 
   let matchedRule = null;
+  
+  // Normalize category for case-insensitive comparison
+  const normalizedCategory = expenseCategory?.toLowerCase();
 
   // 1. Try to match category + threshold (amount >= threshold = full chain)
   matchedRule = rules.find(
-    r => r.category === expenseCategory && 
+    r => r.category?.toLowerCase() === normalizedCategory && 
          r.threshold_amount !== null &&
          r.threshold_amount !== undefined &&
          expenseAmount >= r.threshold_amount
@@ -88,7 +91,7 @@ export async function getApplicableRule(employeeId, expenseAmount, expenseCatego
   //    but the amount is BELOW the threshold → route to direct manager ONLY
   if (!matchedRule) {
     const categoryRuleWithThreshold = rules.find(
-      r => r.category === expenseCategory &&
+      r => r.category?.toLowerCase() === normalizedCategory &&
            r.threshold_amount !== null &&
            r.threshold_amount !== undefined &&
            expenseAmount < r.threshold_amount
@@ -110,7 +113,7 @@ export async function getApplicableRule(employeeId, expenseAmount, expenseCatego
   // 3. Try to match category only (no threshold defined → always use chain)
   if (!matchedRule) {
     matchedRule = rules.find(
-      r => r.category === expenseCategory &&
+      r => r.category?.toLowerCase() === normalizedCategory &&
            (r.threshold_amount === null || r.threshold_amount === undefined)
     );
   }
