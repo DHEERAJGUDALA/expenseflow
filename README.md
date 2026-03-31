@@ -202,3 +202,49 @@ MIT License
 ---
 
 Built with React, Node.js, Supabase, and Tesseract.js
+
+
+
+1. profiles Table
+Stores user data, extending Supabase's auth.users.
+
+id (UUID, Primary Key): References auth.users.id.
+role (Text): e.g., 'employee', 'manager', 'admin'.
+manager_id (UUID): References profiles.id (self-referencing).
+email (Text): User email.
+2. expenses Table
+Stores reimbursement requests.
+
+id (UUID, Primary Key): Unique row ID (ticket_id maps here).
+user_id (UUID): References profiles.id (This serves as the "employee" column).
+description (Text)
+expense_date (Date): Renamed from 'date' as date is a reserved SQL word.
+category (Text)
+paid_by (Text)
+remarks (Text)
+amount (Numeric)
+status (Text): e.g., 'pending', 'approved', 'rejected'
+3. manager_approvals Table
+id (UUID, Primary Key)
+ticket_id (UUID): References expenses.id (As requested, ticket ID is the row in expenses).
+manager_id (UUID): References profiles.id.
+request_owner_id (UUID): References profiles.id.
+approval_subject (Text)
+category (Text)
+request_status (Text)
+total_amount (Numeric): In company's currency.
+status (Text)
+4. admin_approvals Table
+Configuration or state for admin approval sequences.
+
+id (UUID, Primary Key)
+user_id (UUID): References profiles.id.
+is_manager_approve (Boolean)
+is_approve_sequence (Boolean)
+minimum_approval (Integer)
+approver_list (UUID[]): Array of UUIDs referring to managers/admins.
+5. individual_approvals Table
+id (UUID, Primary Key)
+user_id (UUID): References profiles.id.
+manager_id (UUID): References profiles.id.
+approved_or_not (Boolean) - representing approved (true) or rejected/pending (false/null).
