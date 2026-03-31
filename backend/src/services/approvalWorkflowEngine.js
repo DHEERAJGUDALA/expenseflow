@@ -131,7 +131,11 @@ export async function evaluateExpenseStatus(expenseId) {
       }
       
       if (log.action === 'rejected') {
-        return { status: 'rejected', reason: `Rejected at step ${step.step_order}` };
+        return { 
+          status: 'rejected', 
+          reason: `Rejected at step ${step.step_order}`,
+          skipRemaining: true 
+        };
       }
       
       // Continue to next step
@@ -158,7 +162,11 @@ export async function evaluateExpenseStatus(expenseId) {
       }
       
       if (log.action === 'rejected') {
-        return { status: 'rejected', reason: 'Rejected by required approver' };
+        return { 
+          status: 'rejected', 
+          reason: 'Rejected by required approver',
+          skipRemaining: true 
+        };
       }
     }
     
@@ -178,6 +186,15 @@ export async function evaluateExpenseStatus(expenseId) {
     const currentApprovalPercentage = (approvals / totalApprovers) * 100;
     const maxPossiblePercentage = ((approvals + pending) / totalApprovers) * 100;
     
+    // IMPORTANT: Any rejection = instant reject (as per requirement)
+    if (rejections > 0) {
+      return {
+        status: 'rejected',
+        reason: `Rejected by approver`,
+        skipRemaining: true
+      };
+    }
+    
     // Check if already reached threshold
     if (currentApprovalPercentage >= threshold) {
       return { 
@@ -187,7 +204,7 @@ export async function evaluateExpenseStatus(expenseId) {
       };
     }
     
-    // Check if mathematically impossible to reach threshold
+    // Check if mathematically impossible to reach threshold (shouldn't happen now with instant reject)
     if (maxPossiblePercentage < threshold) {
       return { 
         status: 'rejected', 
