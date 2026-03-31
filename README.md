@@ -1,250 +1,108 @@
-# ReimbursementManagement System
+# Reimbursement Management System
 
-A comprehensive expense reimbursement management system with **OCR receipt scanning**, built for hackathon submission.
+A comprehensive, enterprise-grade web application for managing employee reimbursement requests, featuring dynamic multi-step approval workflows, OCR receipt processing, external API currency conversion, and a premium "fintech" aesthetic interface.
 
-## Features
+## 🚀 Key Features
 
-### Core Features
-- **User Authentication** - Secure login/signup with Supabase Auth
-- **Role-based Access Control** - Admin, Manager, and Employee roles
-- **Expense Submission** - Create and track expense requests
-- **OCR Receipt Scanning** - Automatically extract amount, date, merchant, and category from receipt images using Tesseract.js
-- **Multi-currency Support** - USD, EUR, GBP, INR with automatic conversion
-- **Approval Workflow** - Manager approval system with comments
-- **Dashboard Analytics** - Visual stats and expense tracking
+*   **Role-Based Access Control:** Secure, isolated views and actions for Employees, Managers, and System Admins.
+*   **Dynamic Approval Workflows (Rule Builder):**
+    *   Create custom approval chains based on expense category and monetary thresholds.
+    *   Designate sequential approvers (e.g., Line Manager -> Director).
+    *   Assign "Special Approvers" (e.g., CFO) who can instantly bypass the entire chain.
+    *   Set quorum percentage requirements for group approvals.
+*   **Automated Manager Escalation:** Temporarily schedule managers on "Leave" to automatically reroute their pending approvals to the administrative queue.
+*   **Receipt Processing & OCR:** Automatically extract expense amounts from uploaded receipt images to streamline data entry.
+*   **Live Currency Conversion:** Integrated external API to fetch live exchange rates and display local currency equivalents instantly.
+*   **Premium Web Interface:**
+    *   Modern, "Stripe-style" layout featuring dark sidebars (`#0a0a0b`) and bright, content-focused main views.
+    *   Dynamic micro-interactions powered by `framer-motion` (staggered lists, smooth page transitions, interactive modals).
+    *   Fully functional Drag-and-Drop rule reordering utilizing `@dnd-kit`.
+    *   Accessible, visually cohesive components managed through centralized CSS design variables (`index.css`) rather than inline utility classes.
 
-### OCR Capabilities
-- Extracts **amount** with currency detection
-- Parses **dates** in multiple formats (DD/MM/YYYY, MM/DD/YYYY, etc.)
-- Identifies **merchant names** from receipts
-- Auto-categorizes expenses (meals, travel, accommodation, etc.)
-- Confidence scoring for extracted data
+## 🛠 Tech Stack
 
-## Tech Stack
+**Frontend**
+*   **Framework:** React 18 (Vite)
+*   **Routing:** React Router DOM v6
+*   **Styling:** Tailwind CSS + Vanilla CSS Tokens
+*   **Animations:** Framer Motion
+*   **Components:** Radix UI (Unstyled, accessible primitives)
+*   **Icons:** Lucide React
+*   **Charts:** Recharts
+*   **Data Handling:** DND-Kit (Drag and Drop)
 
-| Layer | Technology |
-|-------|------------|
-| Frontend | React 18 + Vite |
-| Styling | Tailwind CSS |
-| Backend | Node.js + Express |
-| Database | Supabase (PostgreSQL) |
-| Auth | Supabase Auth |
-| OCR | Tesseract.js |
+**Backend / Database**
+*   **BaaS:** Supabase (PostgreSQL, Authentication, Realtime)
+*   **Security:** Row Level Security (RLS) policies
+*   **Storage:** Supabase Storage (Receipts, Invoices)
 
-## Project Structure
+## 🎨 Design System
+
+We maintain a strict adherence to a centralized design token system within `index.css`.
+
+**Colors:**
+*   Primary Application: Indigo (`#4f46e5`)
+*   Secondary/Neutral Elements: Slate (`#64748b`)
+*   Success/Approvals: Green
+*   Warnings/Pending: Yellow/Amber
+*   Errors/Rejections: Red
+*   Special Approvers/Admin: Purple
+
+**Typography:**
+*   Headings: **Sora** (Bold, structural, distinctive)
+*   Body: **DM Sans** (Clean, highly legible for dense data)
+
+## 📁 Project Structure
 
 ```
-ReimbursementManagement/
-├── backend/
-│   ├── src/
-│   │   ├── controllers/
-│   │   │   ├── approvalController.js   # Approval workflow
-│   │   │   ├── employeeController.js   # Employee/profile management
-│   │   │   ├── expenseController.js    # Expense CRUD
-│   │   │   ├── ocrController.js        # OCR endpoints
-│   │   │   └── userController.js       # User management
-│   │   ├── routes/
-│   │   ├── services/
-│   │   │   └── ocrService.js           # Tesseract OCR processing
-│   │   ├── middleware/
-│   │   ├── config/
-│   │   ├── app.js
-│   │   └── server.js
-│   └── package.json
+reimbursement-management/
 ├── frontend/
 │   ├── src/
-│   │   ├── pages/
-│   │   │   ├── DashboardPage.jsx       # Main dashboard
-│   │   │   ├── ExpenseFormPage.jsx     # Create expense + OCR
-│   │   │   ├── ExpenseListPage.jsx     # View expenses
-│   │   │   ├── ApprovalsPage.jsx       # Manager approvals
-│   │   │   ├── EmployeeManagementPage.jsx  # Admin employee mgmt
-│   │   │   ├── LoginPage.jsx
-│   │   │   └── SignupPage.jsx
-│   │   ├── components/
-│   │   ├── context/
-│   │   ├── lib/
-│   │   └── App.jsx
-│   └── package.json
-└── database_schema.sql
+│   │   ├── components/       # Reusable UI components (Modals, Tables, Forms, Layout)
+│   │   ├── context/          # React Contexts (AuthContext)
+│   │   ├── lib/              # Utility classes and API interface (supabase.js, api.js, ocr.js)
+│   │   ├── pages/            # Page-level components
+│   │   ├── index.css         # Design system tokens and global styles
+│   │   ├── main.jsx          # Application entry point
+│   │   └── App.jsx           # Routing configuration
+│   ├── package.json
+│   ├── tailwind.config.js    # Standard Tailwind configuration
+│   └── vite.config.js
+├── database/                 # SQL schemas and migration scripts
+├── README.md                 # Project Overview
+└── BUG_JOURNAL.md            # Extensive documentation of past bug fixes and lessons learned
 ```
 
-## Getting Started
+## ⚙️ Initial Setup
 
 ### Prerequisites
-- Node.js 18+
-- npm or yarn
-- Supabase account
+*   Node.js (v18+)
+*   Supabase Account / Local CLI
 
-### 1. Clone the repository
-```bash
-git clone https://github.com/praveenkumarkunchala2005/ReimbursementManagement.git
-cd ReimbursementManagement
-```
+### Local Configuration
 
-### 2. Setup Backend
-```bash
-cd backend
-npm install
-```
+1.  **Clone the Repository**
+2.  **Environment Variables:** Create a `.env` file in the `frontend/` directory with your Supabase credentials.
+    ```env
+    VITE_SUPABASE_URL=your_project_url
+    VITE_SUPABASE_ANON_KEY=your_anon_key
+    ```
+3.  **Install Dependencies:**
+    ```bash
+    cd frontend
+    npm install
+    ```
+4.  **Database Migration:** Execute the `.sql` files found in the `database/` folder against your Supabase instance to prepare your database schemas, tables, and RLS policies.
+5.  **Run Development Server:**
+    ```bash
+    npm run dev
+    ```
 
-Create `.env` file:
-```env
-PORT=3000
-SUPABASE_URL=your_supabase_url
-SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
-```
+## 📝 Usage Guide
 
-Start the server:
-```bash
-npm run dev
-```
+1.  **Admin Initialization:** Register the first user, then modify their role in the Supabase `profiles` table directly to `admin`.
+2.  **Employee Management:** The Admin can create new users, set explicit roles (Admin, Manager, Employee), and configure reporting lines.
+3.  **Rule Configuration:** Admins use the Rule Builder page to establish automated routing configurations.
+4.  **Submission:** Employees navigate to the Expense Form, optionally upload a receipt for OCR, and submit.
+5.  **Approval Flow:** The system computes the required approval sequence. Managers view their specific tasks in their "Approvals" or "Manager Queue" pages.
 
-### 3. Setup Frontend
-```bash
-cd frontend
-npm install
-```
-
-Create `.env` file:
-```env
-VITE_SUPABASE_URL=your_supabase_url
-VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY=your_anon_key
-VITE_API_URL=http://localhost:3000/api
-```
-
-Start the development server:
-```bash
-npm run dev
-```
-
-### 4. Database Setup
-Run the SQL commands in `database_schema.sql` in your Supabase SQL editor.
-
-## API Endpoints
-
-### Authentication
-All endpoints (except public) require Bearer token authentication.
-
-### Expenses
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/expenses` | Create expense |
-| GET | `/api/expenses` | Get all expenses (admin) |
-| GET | `/api/expenses/my-expenses` | Get user's expenses |
-| GET | `/api/expenses/:id` | Get single expense |
-| PUT | `/api/expenses/:id` | Update expense |
-| DELETE | `/api/expenses/:id` | Delete expense |
-| GET | `/api/expenses/stats` | Get expense statistics |
-
-### OCR
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/ocr/scan` | Scan receipt image (base64) |
-| GET | `/api/ocr/supported` | Get supported currencies/categories |
-
-### Approvals
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/approvals/pending` | Get pending approvals |
-| GET | `/api/approvals/history` | Get approval history |
-| POST | `/api/approvals` | Approve/reject expense |
-
-### Employees
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/employees` | Get all employees |
-| GET | `/api/employees/me` | Get current user profile |
-| GET | `/api/employees/my-team` | Get manager's team |
-| POST | `/api/employees/assign-manager` | Assign manager |
-
-## User Roles
-
-| Role | Capabilities |
-|------|--------------|
-| **Employee** | Submit expenses, view own expenses, upload receipts |
-| **Manager** | All employee capabilities + approve/reject team expenses |
-| **Admin** | All capabilities + manage employees, view all expenses |
-
-## OCR Usage
-
-1. Navigate to **Submit Expense** page
-2. Click **Upload Receipt** or drag & drop an image
-3. Wait for OCR processing
-4. Review and confirm extracted data
-5. Submit expense
-
-The OCR supports:
-- JPG, PNG, WEBP images
-- Multiple date formats
-- Currency symbols ($, €, £, ₹)
-- Common merchant name patterns
-
-## Screenshots
-
-### Dashboard
-![Dashboard](docs/dashboard.png)
-
-### Expense Form with OCR
-![Expense Form](docs/expense-form.png)
-
-### Approvals Page
-![Approvals](docs/approvals.png)
-
-## Team
-
-- **Praveen Kumar Kunchala** - Full Stack Developer
-
-## License
-
-MIT License
-
----
-
-Built with React, Node.js, Supabase, and Tesseract.js
-
-
-
-1. profiles Table
-Stores user data, extending Supabase's auth.users.
-
-id (UUID, Primary Key): References auth.users.id.
-role (Text): e.g., 'employee', 'manager', 'admin'.
-manager_id (UUID): References profiles.id (self-referencing).
-email (Text): User email.
-2. expenses Table
-Stores reimbursement requests.
-
-id (UUID, Primary Key): Unique row ID (ticket_id maps here).
-user_id (UUID): References profiles.id (This serves as the "employee" column).
-description (Text)
-expense_date (Date): Renamed from 'date' as date is a reserved SQL word.
-category (Text)
-paid_by (Text)
-remarks (Text)
-amount (Numeric)
-status (Text): e.g., 'pending', 'approved', 'rejected'
-3. manager_approvals Table
-id (UUID, Primary Key)
-ticket_id (UUID): References expenses.id (As requested, ticket ID is the row in expenses).
-manager_id (UUID): References profiles.id.
-request_owner_id (UUID): References profiles.id.
-approval_subject (Text)
-category (Text)
-request_status (Text)
-total_amount (Numeric): In company's currency.
-status (Text)
-4. admin_approvals Table
-Configuration or state for admin approval sequences.
-
-id (UUID, Primary Key)
-user_id (UUID): References profiles.id.
-is_manager_approve (Boolean)
-is_approve_sequence (Boolean)
-minimum_approval (Integer)
-approver_list (UUID[]): Array of UUIDs referring to managers/admins.
-5. individual_approvals Table
-id (UUID, Primary Key)
-user_id (UUID): References profiles.id.
-manager_id (UUID): References profiles.id.
-approved_or_not (Boolean) - representing approved (true) or rejected/pending (false/null).
