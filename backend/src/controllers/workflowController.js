@@ -28,6 +28,10 @@ export const getAllRules = async (req, res) => {
       return res.status(400).json({ error: "User has no company assigned" });
     }
 
+    if (profile.role !== "admin") {
+      return res.status(403).json({ error: "Only admins can view approval rules" });
+    }
+
     const { data: rules, error } = await supabase
       .from("approval_rules")
       .select(`
@@ -64,6 +68,21 @@ export const getAllRules = async (req, res) => {
 export const getRule = async (req, res) => {
   try {
     const { ruleId } = req.params;
+    const userId = req.user.id;
+
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("company_id, role")
+      .eq("id", userId)
+      .single();
+
+    if (!profile?.company_id) {
+      return res.status(400).json({ error: "User has no company assigned" });
+    }
+
+    if (profile.role !== "admin") {
+      return res.status(403).json({ error: "Only admins can view approval rules" });
+    }
 
     const { data: rule, error } = await supabase
       .from("approval_rules")
@@ -83,6 +102,7 @@ export const getRule = async (req, res) => {
         )
       `)
       .eq("id", ruleId)
+      .eq("company_id", profile.company_id)
       .single();
 
     if (error) throw error;
@@ -353,21 +373,45 @@ export const updateRule = async (req, res) => {
 
 /**
  * Delete approval rule (Admin only)
+ * CRITICAL: Only admins can delete rules from their own company
  */
 export const deleteRule = async (req, res) => {
   try {
     const { ruleId } = req.params;
     const userId = req.user.id;
 
-    // Verify user is admin
+    // Verify user is admin AND get company_id
     const { data: profile } = await supabase
       .from("profiles")
-      .select("role")
+      .select("role, company_id")
       .eq("id", userId)
       .single();
 
+    if (!profile) {
+      return res.status(404).json({ error: "User profile not found" });
+    }
+
     if (profile.role !== 'admin') {
       return res.status(403).json({ error: "Only admins can delete approval rules" });
+    }
+
+    if (!profile.company_id) {
+      return res.status(403).json({ error: "No company assigned to your account" });
+    }
+
+    // CRITICAL: Verify rule belongs to admin's company before deleting
+    const { data: ruleToDelete } = await supabase
+      .from("approval_rules")
+      .select("company_id")
+      .eq("id", ruleId)
+      .single();
+
+    if (!ruleToDelete) {
+      return res.status(404).json({ error: "Approval rule not found" });
+    }
+
+    if (ruleToDelete.company_id !== profile.company_id) {
+      return res.status(403).json({ error: "Cannot delete rule from different company" });
     }
 
     // Check if rule is in use
@@ -386,7 +430,8 @@ export const deleteRule = async (req, res) => {
     const { error } = await supabase
       .from("approval_rules")
       .delete()
-      .eq("id", ruleId);
+      .eq("id", ruleId)
+      .eq("company_id", profile.company_id); // Extra safety check
 
     if (error) throw error;
 
@@ -399,12 +444,29 @@ export const deleteRule = async (req, res) => {
 
 /**
  * Get approval status for an expense
+ * CRITICAL: Only returns status if expense belongs to user's company
  */
 export const getExpenseApprovalStatus = async (req, res) => {
   try {
     const { expenseId } = req.params;
+    const userId = req.user.id;
 
-    // Get expense details
+    // Get current user's company_id
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("company_id")
+      .eq("id", userId)
+      .single();
+
+    if (!profile) {
+      return res.status(404).json({ error: "User profile not found" });
+    }
+
+    if (!profile.company_id) {
+      return res.status(403).json({ error: "No company assigned to your account" });
+    }
+
+    // Get expense details SCOPED TO COMPANY
     const { data: expense, error: expError } = await supabase
       .from("expenses")
       .select(`
@@ -414,12 +476,23 @@ export const getExpenseApprovalStatus = async (req, res) => {
         category,
         status,
         current_step,
+        company_id,
         employee:employee_id(id, email, company_id)
       `)
       .eq("id", expenseId)
+      .eq("company_id", profile.company_id) // MULTI-TENANCY FILTER
       .single();
 
-    if (expError) throw expError;
+    if (expError) {
+      if (expError.code === 'PGRST116') {
+        return res.status(404).json({ error: "Expense not found or not in your company" });
+      }
+      throw expError;
+    }
+
+    if (!expense) {
+      return res.status(404).json({ error: "Expense not found or not in your company" });
+    }
 
     // Get approval status
     const status = await getApprovalStatus(expenseId);
@@ -466,10 +539,26 @@ export const processApproval = async (req, res) => {
 
 /**
  * Get pending approvals for current user
+ * CRITICAL: Only shows expenses from same company
  */
 export const getMyPendingApprovals = async (req, res) => {
   try {
     const userId = req.user.id;
+
+    // Get current user's company_id
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("company_id")
+      .eq("id", userId)
+      .single();
+
+    if (!profile) {
+      return res.status(404).json({ error: "User profile not found" });
+    }
+
+    if (!profile.company_id) {
+      return res.status(403).json({ error: "No company assigned to your account" });
+    }
 
     // Get all expenses where user is a pending approver
     const { data: pendingLogs, error: logsError } = await supabase
@@ -488,6 +577,7 @@ export const getMyPendingApprovals = async (req, res) => {
           expense_date,
           status,
           current_step,
+          company_id,
           employee:employee_id(id, email)
         )
       `)
@@ -497,9 +587,10 @@ export const getMyPendingApprovals = async (req, res) => {
 
     if (logsError) throw logsError;
 
+    // Filter expenses to only include from same company (MULTI-TENANCY FILTER)
     const expenses = pendingLogs
       .map(log => log.expense)
-      .filter(exp => exp && exp.status === 'pending');
+      .filter(exp => exp && exp.status === 'pending' && exp.company_id === profile.company_id);
 
     res.json({ 
       count: expenses.length,
@@ -513,10 +604,26 @@ export const getMyPendingApprovals = async (req, res) => {
 
 /**
  * Get approval history for current user
+ * CRITICAL: Only shows approvals for expenses from same company
  */
 export const getMyApprovalHistory = async (req, res) => {
   try {
     const userId = req.user.id;
+
+    // Get current user's company_id
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("company_id")
+      .eq("id", userId)
+      .single();
+
+    if (!profile) {
+      return res.status(404).json({ error: "User profile not found" });
+    }
+
+    if (!profile.company_id) {
+      return res.status(403).json({ error: "No company assigned to your account" });
+    }
 
     const { data: logs, error: logsError } = await supabase
       .from("approval_logs")
@@ -536,6 +643,7 @@ export const getMyApprovalHistory = async (req, res) => {
           category,
           expense_date,
           status,
+          company_id,
           employee:employee_id(id, email)
         )
       `)
@@ -546,9 +654,14 @@ export const getMyApprovalHistory = async (req, res) => {
 
     if (logsError) throw logsError;
 
+    // Filter logs to only include expenses from same company (MULTI-TENANCY FILTER)
+    const companyFilteredLogs = logs.filter(log => 
+      log.expense?.company_id === profile.company_id
+    );
+
     res.json({ 
-      count: logs.length,
-      history: logs 
+      count: companyFilteredLogs.length,
+      history: companyFilteredLogs 
     });
   } catch (err) {
     console.error("Error fetching approval history:", err);
