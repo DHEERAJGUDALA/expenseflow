@@ -19,15 +19,13 @@ export function EmployeeManagementPage() {
   const [showModal, setShowModal] = useState(false);
   const [modalMode, setModalMode] = useState("create"); // create or edit
   const [selectedEmployee, setSelectedEmployee] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Form state
+  // Form state - matches database schema
   const [formData, setFormData] = useState({
     email: "",
-    full_name: "",
     role: "employee",
-    department: "",
-    manager_id: "",
-    is_manager_approver: false
+    manager_id: ""
   });
 
   useEffect(() => {
@@ -53,11 +51,8 @@ export function EmployeeManagementPage() {
   const openCreateModal = () => {
     setFormData({
       email: "",
-      full_name: "",
       role: "employee",
-      department: "",
-      manager_id: "",
-      is_manager_approver: false
+      manager_id: ""
     });
     setModalMode("create");
     setShowModal(true);
@@ -67,11 +62,8 @@ export function EmployeeManagementPage() {
   const openEditModal = (employee) => {
     setFormData({
       email: employee.email,
-      full_name: employee.full_name,
       role: employee.role,
-      department: employee.department || "",
-      manager_id: employee.manager_id || "",
-      is_manager_approver: employee.is_manager_approver || false
+      manager_id: employee.manager_id || ""
     });
     setSelectedEmployee(employee);
     setModalMode("edit");
@@ -82,26 +74,35 @@ export function EmployeeManagementPage() {
   const closeModal = () => {
     setShowModal(false);
     setSelectedEmployee(null);
+    setError(null);
   };
 
   const handleInputChange = (e) => {
-    const { name, value, type, checked } = e.target;
+    const { name, value } = e.target;
     setFormData(prev => ({
       ...prev,
-      [name]: type === "checkbox" ? checked : value
+      [name]: value
     }));
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError(null);
+    setIsSubmitting(true);
 
     try {
       if (modalMode === "create") {
-        await employeeApi.create(formData);
+        await employeeApi.create({
+          email: formData.email,
+          role: formData.role,
+          manager_id: formData.manager_id || null
+        });
         setSuccess("Employee created and invite sent!");
       } else {
-        await employeeApi.update(selectedEmployee.id, formData);
+        await employeeApi.update(selectedEmployee.id, {
+          role: formData.role,
+          manager_id: formData.manager_id || null
+        });
         setSuccess("Employee updated successfully!");
       }
       closeModal();
@@ -109,11 +110,13 @@ export function EmployeeManagementPage() {
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
       setError(err.message);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleDelete = async (employee) => {
-    if (!confirm(`Are you sure you want to remove ${employee.full_name}?`)) {
+    if (!confirm(`Are you sure you want to remove ${employee.email}?`)) {
       return;
     }
 
@@ -125,6 +128,11 @@ export function EmployeeManagementPage() {
     } catch (err) {
       setError(err.message);
     }
+  };
+
+  // Helper to get display name (email username)
+  const getDisplayName = (email) => {
+    return email?.split("@")[0] || "Unknown";
   };
 
   return (
@@ -140,19 +148,21 @@ export function EmployeeManagementPage() {
             onClick={openCreateModal}
             className="px-6 py-3 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors flex items-center gap-2"
           >
-            ➕ Add Employee
+            + Add Employee
           </button>
         </div>
 
         {/* Alerts */}
-        {error && (
-          <div className="mb-4 p-4 bg-red-50 border border-red-200 text-red-700 rounded-lg">
-            {error}
+        {error && !showModal && (
+          <div className="mb-4 p-4 bg-red-50 border border-red-200 text-red-700 rounded-lg flex justify-between items-center">
+            <span>{error}</span>
+            <button onClick={() => setError(null)} className="text-red-500 hover:text-red-700">x</button>
           </div>
         )}
         {success && (
-          <div className="mb-4 p-4 bg-green-50 border border-green-200 text-green-700 rounded-lg">
-            {success}
+          <div className="mb-4 p-4 bg-green-50 border border-green-200 text-green-700 rounded-lg flex justify-between items-center">
+            <span>{success}</span>
+            <button onClick={() => setSuccess(null)} className="text-green-500 hover:text-green-700">x</button>
           </div>
         )}
 
@@ -186,7 +196,7 @@ export function EmployeeManagementPage() {
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
           {isLoading ? (
             <div className="p-8 text-center text-slate-500">
-              <span className="animate-spin inline-block text-2xl mb-2">⏳</span>
+              <span className="animate-spin inline-block text-2xl mb-2">...</span>
               <p>Loading employees...</p>
             </div>
           ) : employees.length === 0 ? (
@@ -200,9 +210,8 @@ export function EmployeeManagementPage() {
                 <tr>
                   <th className="text-left px-4 py-3 text-sm font-medium text-slate-600">Employee</th>
                   <th className="text-left px-4 py-3 text-sm font-medium text-slate-600">Role</th>
-                  <th className="text-left px-4 py-3 text-sm font-medium text-slate-600">Department</th>
                   <th className="text-left px-4 py-3 text-sm font-medium text-slate-600">Manager</th>
-                  <th className="text-left px-4 py-3 text-sm font-medium text-slate-600">Approver</th>
+                  <th className="text-left px-4 py-3 text-sm font-medium text-slate-600">Joined</th>
                   <th className="text-right px-4 py-3 text-sm font-medium text-slate-600">Actions</th>
                 </tr>
               </thead>
@@ -212,10 +221,10 @@ export function EmployeeManagementPage() {
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
                         <div className="w-10 h-10 bg-slate-200 rounded-full flex items-center justify-center font-medium text-slate-600">
-                          {employee.full_name?.charAt(0).toUpperCase()}
+                          {getDisplayName(employee.email)?.charAt(0).toUpperCase()}
                         </div>
                         <div>
-                          <p className="font-medium text-slate-900">{employee.full_name}</p>
+                          <p className="font-medium text-slate-900">{getDisplayName(employee.email)}</p>
                           <p className="text-sm text-slate-500">{employee.email}</p>
                         </div>
                       </div>
@@ -226,17 +235,10 @@ export function EmployeeManagementPage() {
                       </span>
                     </td>
                     <td className="px-4 py-3 text-slate-600">
-                      {employee.department || "-"}
+                      {employee.manager?.email ? getDisplayName(employee.manager.email) : "-"}
                     </td>
-                    <td className="px-4 py-3 text-slate-600">
-                      {employee.manager?.full_name || "-"}
-                    </td>
-                    <td className="px-4 py-3">
-                      {employee.is_manager_approver ? (
-                        <span className="text-green-600">✅</span>
-                      ) : (
-                        <span className="text-slate-400">-</span>
-                      )}
+                    <td className="px-4 py-3 text-slate-500 text-sm">
+                      {new Date(employee.created_at).toLocaleDateString()}
                     </td>
                     <td className="px-4 py-3 text-right">
                       <button
@@ -268,6 +270,11 @@ export function EmployeeManagementPage() {
               <h2 className="text-xl font-bold text-slate-900">
                 {modalMode === "create" ? "Add New Employee" : "Edit Employee"}
               </h2>
+              <p className="text-sm text-slate-500 mt-1">
+                {modalMode === "create" 
+                  ? "An email invite will be sent to the new employee" 
+                  : "Update employee role and manager assignment"}
+              </p>
             </div>
 
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
@@ -287,60 +294,39 @@ export function EmployeeManagementPage() {
                   value={formData.email}
                   onChange={handleInputChange}
                   disabled={modalMode === "edit"}
-                  className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent disabled:bg-slate-100"
+                  placeholder="employee@company.com"
+                  className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent disabled:bg-slate-100 disabled:text-slate-500"
                   required
                 />
+                {modalMode === "edit" && (
+                  <p className="text-xs text-slate-500 mt-1">Email cannot be changed after creation</p>
+                )}
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">
-                  Full Name *
+                  Role *
                 </label>
-                <input
-                  type="text"
-                  name="full_name"
-                  value={formData.full_name}
+                <select
+                  name="role"
+                  value={formData.role}
                   onChange={handleInputChange}
                   className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                  required
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">
-                    Role *
-                  </label>
-                  <select
-                    name="role"
-                    value={formData.role}
-                    onChange={handleInputChange}
-                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                  >
-                    <option value="employee">Employee</option>
-                    <option value="manager">Manager</option>
-                    <option value="admin">Admin</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">
-                    Department
-                  </label>
-                  <input
-                    type="text"
-                    name="department"
-                    value={formData.department}
-                    onChange={handleInputChange}
-                    placeholder="e.g., Engineering"
-                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                  />
-                </div>
+                >
+                  <option value="employee">Employee</option>
+                  <option value="manager">Manager</option>
+                  <option value="admin">Admin</option>
+                </select>
+                <p className="text-xs text-slate-500 mt-1">
+                  {formData.role === "admin" && "Admins can manage all employees and expenses"}
+                  {formData.role === "manager" && "Managers can approve their team's expenses"}
+                  {formData.role === "employee" && "Employees can submit and track their expenses"}
+                </p>
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">
-                  Manager
+                  Reports To (Manager)
                 </label>
                 <select
                   name="manager_id"
@@ -348,42 +334,36 @@ export function EmployeeManagementPage() {
                   onChange={handleInputChange}
                   className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
                 >
-                  <option value="">No manager</option>
-                  {managers.map(mgr => (
-                    <option key={mgr.id} value={mgr.id}>
-                      {mgr.full_name} ({mgr.role})
-                    </option>
-                  ))}
+                  <option value="">No manager assigned</option>
+                  {managers
+                    .filter(mgr => modalMode === "create" || mgr.id !== selectedEmployee?.id)
+                    .map(mgr => (
+                      <option key={mgr.id} value={mgr.id}>
+                        {getDisplayName(mgr.email)} ({mgr.role})
+                      </option>
+                    ))}
                 </select>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  name="is_manager_approver"
-                  id="is_manager_approver"
-                  checked={formData.is_manager_approver}
-                  onChange={handleInputChange}
-                  className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
-                />
-                <label htmlFor="is_manager_approver" className="text-sm text-slate-700">
-                  Manager must approve this employee's expenses first
-                </label>
               </div>
 
               <div className="flex gap-3 pt-4">
                 <button
                   type="button"
                   onClick={closeModal}
-                  className="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors"
+                  disabled={isSubmitting}
+                  className="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+                  disabled={isSubmitting}
+                  className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
                 >
-                  {modalMode === "create" ? "Send Invite" : "Save Changes"}
+                  {isSubmitting 
+                    ? "Processing..." 
+                    : modalMode === "create" 
+                      ? "Send Invite" 
+                      : "Save Changes"}
                 </button>
               </div>
             </form>

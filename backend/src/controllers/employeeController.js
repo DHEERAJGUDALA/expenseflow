@@ -80,6 +80,7 @@ export const createEmployee = async (req, res) => {
   try {
     const { email, role, manager_id } = req.body;
     const adminUserId = req.user.id;
+    const userMetadataRole = req.user.user_metadata?.role;
 
     // Validate required fields
     if (!email) {
@@ -92,14 +93,17 @@ export const createEmployee = async (req, res) => {
       return res.status(400).json({ error: "Invalid role. Must be admin, manager, or employee" });
     }
 
-    // Verify admin role
+    // Verify admin role - check both profile table and user_metadata
     const { data: adminProfile, error: adminError } = await supabase
       .from("profiles")
       .select("role")
       .eq("id", adminUserId)
       .single();
 
-    if (adminError || adminProfile.role !== "admin") {
+    const profileRole = adminProfile?.role;
+    const isAdmin = profileRole === "admin" || userMetadataRole === "admin";
+
+    if (!isAdmin) {
       return res.status(403).json({ error: "Only admins can create employees" });
     }
 
@@ -149,15 +153,19 @@ export const updateEmployee = async (req, res) => {
     const { id } = req.params;
     const { role, manager_id } = req.body;
     const adminUserId = req.user.id;
+    const userMetadataRole = req.user.user_metadata?.role;
 
-    // Verify admin role
+    // Verify admin role - check both profile table and user_metadata
     const { data: adminProfile, error: adminError } = await supabase
       .from("profiles")
       .select("role")
       .eq("id", adminUserId)
       .single();
 
-    if (adminError || adminProfile.role !== "admin") {
+    const profileRole = adminProfile?.role;
+    const isAdmin = profileRole === "admin" || userMetadataRole === "admin";
+
+    if (!isAdmin) {
       return res.status(403).json({ error: "Only admins can update employees" });
     }
 
@@ -193,15 +201,19 @@ export const deleteEmployee = async (req, res) => {
   try {
     const { id } = req.params;
     const adminUserId = req.user.id;
+    const userMetadataRole = req.user.user_metadata?.role;
 
-    // Verify admin
+    // Verify admin - check both profile table and user_metadata
     const { data: adminProfile, error: adminError } = await supabase
       .from("profiles")
       .select("role")
       .eq("id", adminUserId)
       .single();
 
-    if (adminError || adminProfile.role !== "admin") {
+    const profileRole = adminProfile?.role;
+    const isAdmin = profileRole === "admin" || userMetadataRole === "admin";
+
+    if (!isAdmin) {
       return res.status(403).json({ error: "Only admins can delete employees" });
     }
 
@@ -231,19 +243,23 @@ export const assignManager = async (req, res) => {
   try {
     const { employee_id, manager_id } = req.body;
     const adminUserId = req.user.id;
+    const userMetadataRole = req.user.user_metadata?.role;
 
     if (!employee_id) {
       return res.status(400).json({ error: "Employee ID is required" });
     }
 
-    // Verify admin
+    // Verify admin - check both profile table and user_metadata
     const { data: adminProfile, error: adminError } = await supabase
       .from("profiles")
       .select("role")
       .eq("id", adminUserId)
       .single();
 
-    if (adminError || adminProfile.role !== "admin") {
+    const profileRole = adminProfile?.role;
+    const isAdmin = profileRole === "admin" || userMetadataRole === "admin";
+
+    if (!isAdmin) {
       return res.status(403).json({ error: "Only admins can assign managers" });
     }
 
