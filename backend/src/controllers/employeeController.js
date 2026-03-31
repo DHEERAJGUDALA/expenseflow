@@ -107,26 +107,54 @@ export const createEmployee = async (req, res) => {
       return res.status(403).json({ error: "Only admins can create employees" });
     }
 
-    // Create auth user with invite
-    const { data: authData, error: authError } = await supabase.auth.admin.inviteUserByEmail(email, {
-      data: {
-        role: role || "employee"
-      }
-    });
+    // Check if user already exists in auth
+    const { data: existingUsers } = await supabase.auth.admin.listUsers();
+    const existingUser = existingUsers?.users?.find(u => u.email === email);
 
-    if (authError) {
-      // If user already exists, try to update their profile
-      if (authError.message.includes("already been registered")) {
-        return res.status(400).json({ error: "User with this email already exists" });
+    let userId;
+
+    if (existingUser) {
+      // User already exists in auth
+      userId = existingUser.id;
+
+      // Check if profile exists
+      const { data: existingProfile } = await supabase
+        .from("profiles")
+        .select("id")
+        .eq("id", userId)
+        .single();
+
+      if (existingProfile) {
+        return res.status(400).json({ error: "Employee already exists in the system" });
       }
-      throw authError;
+    } else {
+      // Create new auth user WITHOUT sending email (to avoid rate limits)
+      const tempPassword = `Temp${Math.random().toString(36).slice(2)}!123`;
+      
+      const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+        email,
+        password: tempPassword,
+        email_confirm: true, // Auto-confirm email to skip email verification
+        user_metadata: {
+          role: role || "employee"
+        }
+      });
+
+      if (authError) {
+        if (authError.message.includes("already registered") || authError.message.includes("already exists")) {
+          return res.status(400).json({ error: "User with this email already exists" });
+        }
+        throw authError;
+      }
+
+      userId = authData.user.id;
     }
 
     // Create profile record
     const { data: profile, error: profileError } = await supabase
       .from("profiles")
       .insert({
-        id: authData.user.id,
+        id: userId,
         email,
         role: role || "employee",
         manager_id: manager_id || null
@@ -138,7 +166,7 @@ export const createEmployee = async (req, res) => {
 
     res.status(201).json({ 
       employee: profile, 
-      message: "Employee created and invite sent" 
+      message: "Employee created successfully (password reset link should be sent manually)" 
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
