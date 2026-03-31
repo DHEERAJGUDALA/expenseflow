@@ -305,3 +305,72 @@ export const escalationApi = {
   // Get managers currently on leave (Admin only)
   getManagersOnLeave: () => apiRequest("/escalation/managers-on-leave")
 };
+
+// ===================
+// APPROVAL RULE API (Admin)
+// ===================
+
+export const approvalRuleApi = {
+  // Get all rules
+  getAll: () => apiRequest("/approval-rules"),
+  
+  // Create rule with steps
+  create: (data) => apiRequest("/approval-rules", {
+    method: "POST",
+    body: JSON.stringify(data)
+  }),
+  
+  // Update rule
+  update: (id, data) => apiRequest(`/approval-rules/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(data)
+  }),
+  
+  // Delete rule
+  delete: (id) => apiRequest(`/approval-rules/${id}`, {
+    method: "DELETE"
+  }),
+  
+  // Get eligible approvers (managers + admins)
+  getEligibleApprovers: () => apiRequest("/approval-rules/eligible-approvers")
+};
+
+// ===================
+// MANAGER API
+// ===================
+
+export const managerApi = {
+  // Get sequential approval queue
+  getQueue: () => apiRequest("/manager/queue"),
+  
+  // Get special approver queue
+  getSpecialQueue: () => apiRequest("/manager/special-queue"),
+  
+  // Approve expense (sequential)
+  approve: (expenseId, comment) => apiRequest(`/manager/expenses/${expenseId}/approve`, {
+    method: "POST",
+    body: JSON.stringify({ comment })
+  }),
+  
+  // Reject expense (sequential)
+  reject: (expenseId, comment) => apiRequest(`/manager/expenses/${expenseId}/reject`, {
+    method: "POST",
+    body: JSON.stringify({ comment })
+  }),
+  
+  // Special approve
+  specialApprove: (expenseId, comment) => apiRequest(`/manager/expenses/${expenseId}/special-approve`, {
+    method: "POST",
+    body: JSON.stringify({ comment })
+  }),
+  
+  // Special reject
+  specialReject: (expenseId, comment) => apiRequest(`/manager/expenses/${expenseId}/special-reject`, {
+    method: "POST",
+    body: JSON.stringify({ comment })
+  }),
+
+  // Get team expenses
+  getTeamExpenses: () => apiRequest("/manager/team-expenses")
+};
+
