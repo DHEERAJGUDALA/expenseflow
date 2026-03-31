@@ -1,4 +1,5 @@
 import { supabase } from "../config/supabaseClient.js";
+import { initializeExpenseWorkflow } from "../services/approvalWorkflowEngine.js";
 
 // Cache for exchange rates (expires after 1 hour)
 let exchangeRateCache = {
@@ -118,6 +119,17 @@ export const createExpense = async (req, res) => {
       .single();
 
     if (expError) throw expError;
+
+    // Initialize approval workflow
+    try {
+      const workflow = await initializeExpenseWorkflow(expense.id, userId);
+      if (workflow) {
+        console.log(`Workflow initialized for expense ${expense.id}:`, workflow.workflow_name);
+      }
+    } catch (workflowError) {
+      console.error("Error initializing workflow:", workflowError);
+      // Don't fail expense creation if workflow fails
+    }
 
     res.status(201).json({
       expense,

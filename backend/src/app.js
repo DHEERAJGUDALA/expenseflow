@@ -6,6 +6,7 @@ import expenseRoutes from "./routes/expenseRoutes.js";
 import approvalRoutes from "./routes/approvalRoutes.js";
 import employeeRoutes from "./routes/employeeRoutes.js";
 import ocrRoutes from "./routes/ocrRoutes.js";
+import workflowRoutes from "./routes/workflowRoutes.js";
 
 const app = express();
 
@@ -24,6 +25,7 @@ app.use("/api/expenses", expenseRoutes);
 app.use("/api/approvals", approvalRoutes);
 app.use("/api/employees", employeeRoutes);
 app.use("/api/ocr", ocrRoutes);
+app.use("/api/workflows", workflowRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
