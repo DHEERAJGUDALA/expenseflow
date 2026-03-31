@@ -1,38 +1,43 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
+import { motion } from "framer-motion";
 import { DashboardLayout } from "../components/DashboardLayout";
 import { expenseApi } from "../lib/api";
+import {
+  Users, RefreshCw, CheckCircle2, Clock, CheckCircle, 
+  XCircle, Filter, DollarSign, Calendar, ChevronRight, Info
+} from "lucide-react";
 
-const STATUS_COLORS = {
-  draft: "bg-slate-100 text-slate-700",
-  pending: "bg-yellow-100 text-yellow-700",
-  approved: "bg-green-100 text-green-700",
-  rejected: "bg-red-100 text-red-700",
-  paid: "bg-blue-100 text-blue-700",
-  partially_approved: "bg-purple-100 text-purple-700"
+const CATEGORY_ICONS = {
+  meals: "🍽️", travel: "✈️", accommodation: "🏨", transport: "🚗",
+  office_supplies: "📎", entertainment: "🎬", communication: "📱",
+  software: "💻", equipment: "🖥️", other: "📦"
+};
+
+const getStatusBadge = (status) => {
+  const map = {
+    approved: "badge-success",
+    pending: "badge-warning",
+    rejected: "badge-danger",
+    draft: "badge-neutral",
+    paid: "badge-accent"
+  };
+  return map[status] || "badge-neutral";
 };
 
 const STATUS_LABELS = {
-  draft: "Draft",
-  pending: "Pending",
+  all: "All Expenses",
+  pending: "Pending Approval",
   approved: "Approved",
   rejected: "Rejected",
-  paid: "Paid",
-  partially_approved: "Partial"
+  paid: "Paid"
 };
 
-const CATEGORY_ICONS = {
-  meals: "🍽️",
-  travel: "✈️",
-  accommodation: "🏨",
-  transport: "🚗",
-  office_supplies: "📎",
-  entertainment: "🎬",
-  communication: "📱",
-  software: "💻",
-  equipment: "🖥️",
-  other: "📦"
-};
+const fadeIn = (delay = 0) => ({
+  initial: { opacity: 0, y: 12 },
+  animate: { opacity: 1, y: 0 },
+  transition: { duration: 0.35, delay, ease: "easeOut" }
+});
 
 export function TeamExpensesPage() {
   const navigate = useNavigate();
@@ -41,250 +46,182 @@ export function TeamExpensesPage() {
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState("all");
   const [stats, setStats] = useState({
-    total: 0,
-    pending: 0,
-    approved: 0,
-    rejected: 0,
-    totalAmount: 0,
-    pendingAmount: 0
+    total: 0, pending: 0, approved: 0, rejected: 0, totalAmount: 0, pendingAmount: 0
   });
 
-  useEffect(() => {
-    loadTeamExpenses();
-  }, [filter]);
+  useEffect(() => { loadTeamExpenses(); }, [filter]);
 
   const loadTeamExpenses = async () => {
-    setIsLoading(true);
+    setIsLoading(true); setError(null);
     try {
-      const params = {};
-      if (filter !== "all") {
-        params.status = filter;
-      }
+      const params = filter !== "all" ? { status: filter } : {};
       const data = await expenseApi.getTeamExpenses(params);
       const expenseList = data.expenses || [];
       setExpenses(expenseList);
       
-      // Calculate stats
-      const allExpenses = filter === "all" ? expenseList : (await expenseApi.getTeamExpenses({})).expenses || [];
+      const allExpensesData = filter === "all" ? expenseList : (await expenseApi.getTeamExpenses({})).expenses || [];
       setStats({
-        total: allExpenses.length,
-        pending: allExpenses.filter(e => e.status === "pending").length,
-        approved: allExpenses.filter(e => e.status === "approved").length,
-        rejected: allExpenses.filter(e => e.status === "rejected").length,
-        totalAmount: allExpenses.reduce((sum, e) => sum + parseFloat(e.converted_amount || e.amount || 0), 0),
-        pendingAmount: allExpenses.filter(e => e.status === "pending").reduce((sum, e) => sum + parseFloat(e.converted_amount || e.amount || 0), 0)
+        total: allExpensesData.length,
+        pending: allExpensesData.filter(e => e.status === "pending").length,
+        approved: allExpensesData.filter(e => e.status === "approved").length,
+        rejected: allExpensesData.filter(e => e.status === "rejected").length,
+        totalAmount: allExpensesData.reduce((sum, e) => sum + parseFloat(e.converted_amount || e.amount || 0), 0),
+        pendingAmount: allExpensesData.filter(e => e.status === "pending").reduce((sum, e) => sum + parseFloat(e.converted_amount || e.amount || 0), 0)
       });
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setIsLoading(false);
-    }
+    } catch (err) { setError(err.message); }
+    finally { setIsLoading(false); }
   };
 
-  const formatCurrency = (amount, currency = "USD") => {
-    return new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: currency
-    }).format(amount);
+  const formatCurrency = (amount, currency = "INR") => {
+    try { return new Intl.NumberFormat("en-IN", { style: "currency", currency }).format(amount); }
+    catch { return `${currency} ${parseFloat(amount).toFixed(2)}`; }
   };
 
-  const formatDate = (dateStr) => {
-    return new Date(dateStr).toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric"
-    });
-  };
+  const formatDate = (dateStr) => new Date(dateStr).toLocaleDateString("en-IN", { month: "short", day: "numeric", year: "numeric" });
 
   const getWaitingTime = (createdAt) => {
-    const created = new Date(createdAt);
-    const now = new Date();
-    const diffMs = now - created;
+    const diffMs = new Date() - new Date(createdAt);
     const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
     const diffHours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-    
-    if (diffDays > 0) {
-      return `${diffDays}d ${diffHours}h`;
-    }
+    if (diffDays > 0) return `${diffDays}d ${diffHours}h`;
     return `${diffHours}h`;
   };
 
   return (
     <DashboardLayout>
-      <div className="p-6">
-        {/* Header */}
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold text-slate-900">Team Expenses</h1>
-          <p className="text-slate-600">View all expenses from your direct reports (read-only)</p>
-        </div>
+      <div className="p-6 lg:p-8 max-w-7xl mx-auto">
+        <motion.div {...fadeIn(0)} className="page-header flex flex-col md:flex-row md:items-end justify-between gap-4">
+          <div>
+            <h1 className="page-title flex items-center gap-2">
+              <Users size={24} style={{ color: "var(--accent)" }} /> Team Overview
+            </h1>
+            <p className="page-subtitle">View all expenses requested by your direct reports.</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Link to="/app/approvals" className="btn btn-primary btn-sm flex items-center gap-1">
+              <CheckCircle2 size={16} /> Action Approvals
+            </Link>
+          </div>
+        </motion.div>
 
-        {/* Stats Cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-          <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-200">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-slate-100 rounded-lg flex items-center justify-center text-xl">
-                📊
+        {/* Stats */}
+        <motion.div {...fadeIn(0.05)} className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+          {[
+            { label: "Total Reports", value: stats.total, icon: Users, color: "var(--text-primary)" },
+            { label: "Pending", value: stats.pending, icon: Clock, color: "var(--warning)" },
+            { label: "Approved", value: stats.approved, icon: CheckCircle, color: "var(--success)" },
+            { label: "Pending Value", value: formatCurrency(stats.pendingAmount, "INR"), icon: DollarSign, color: "var(--accent)" }
+          ].map((stat, i) => (
+            <div key={i} className="stat-card">
+              <div className="flex items-center justify-between mb-2">
+                <stat.icon size={16} style={{ color: stat.color }} />
+                <span className="stat-label" style={{ margin: 0 }}>{stat.label}</span>
               </div>
-              <div>
-                <p className="text-sm text-slate-500">Total Expenses</p>
-                <p className="text-xl font-bold text-slate-900">{stats.total}</p>
-              </div>
+              <p className="stat-value" style={{ color: stat.color, fontSize: typeof stat.value === "string" ? "18px" : "24px" }}>
+                {stat.value}
+              </p>
             </div>
-          </div>
-          <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-200">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-yellow-100 rounded-lg flex items-center justify-center text-xl">
-                ⏳
-              </div>
-              <div>
-                <p className="text-sm text-slate-500">Pending</p>
-                <p className="text-xl font-bold text-yellow-600">{stats.pending}</p>
-              </div>
-            </div>
-          </div>
-          <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-200">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center text-xl">
-                ✅
-              </div>
-              <div>
-                <p className="text-sm text-slate-500">Approved</p>
-                <p className="text-xl font-bold text-green-600">{stats.approved}</p>
-              </div>
-            </div>
-          </div>
-          <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-200">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center text-xl">
-                💰
-              </div>
-              <div>
-                <p className="text-sm text-slate-500">Pending Amount</p>
-                <p className="text-xl font-bold text-indigo-600">{formatCurrency(stats.pendingAmount)}</p>
-              </div>
-            </div>
-          </div>
-        </div>
+          ))}
+        </motion.div>
 
-        {/* Filters */}
-        <div className="flex gap-2 mb-6 flex-wrap">
+        <motion.div {...fadeIn(0.1)} className="tabs mb-6 flex-wrap">
           {["all", "pending", "approved", "rejected", "paid"].map(status => (
-            <button
-              key={status}
-              onClick={() => setFilter(status)}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                filter === status
-                  ? "bg-slate-900 text-white"
-                  : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
-              }`}
-            >
-              {status === "all" ? "All" : STATUS_LABELS[status]}
+            <button key={status} onClick={() => setFilter(status)} className={`tab ${filter === status ? "tab-active" : ""}`}>
+              {STATUS_LABELS[status]}
             </button>
           ))}
-        </div>
+        </motion.div>
 
-        {/* Error */}
-        {error && (
-          <div className="mb-4 p-4 bg-red-50 border border-red-200 text-red-700 rounded-lg flex justify-between items-center">
-            <span>{error}</span>
-            <button onClick={() => setError(null)} className="text-red-500 hover:text-red-700">✕</button>
-          </div>
-        )}
+        {error && <div className="alert alert-danger mb-4">{error}</div>}
 
-        {/* Team Expenses Table */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+        <motion.div {...fadeIn(0.15)} className="card overflow-hidden">
           {isLoading ? (
-            <div className="p-8 text-center text-slate-500">
-              <span className="animate-spin inline-block text-2xl mb-2">⏳</span>
-              <p>Loading team expenses...</p>
-            </div>
+            <div className="flex justify-center py-20"><div className="spinner spinner-lg text-slate-400" /></div>
           ) : expenses.length === 0 ? (
-            <div className="p-8 text-center text-slate-500">
-              <span className="text-4xl mb-2 block">📭</span>
-              <p className="font-medium">No team expenses found</p>
-              <p className="text-sm">Expenses from your direct reports will appear here</p>
+            <div className="empty-state">
+              <div className="empty-state-icon">📭</div>
+              <div className="empty-state-title">No expenses found</div>
+              <div className="empty-state-text">No team expenses match the current filter.</div>
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-slate-50 border-b border-slate-200">
+              <table>
+                <thead>
                   <tr>
-                    <th className="text-left px-4 py-3 text-sm font-medium text-slate-600">Employee</th>
-                    <th className="text-left px-4 py-3 text-sm font-medium text-slate-600">Date</th>
-                    <th className="text-left px-4 py-3 text-sm font-medium text-slate-600">Category</th>
-                    <th className="text-left px-4 py-3 text-sm font-medium text-slate-600">Description</th>
-                    <th className="text-right px-4 py-3 text-sm font-medium text-slate-600">Amount</th>
-                    <th className="text-center px-4 py-3 text-sm font-medium text-slate-600">Status</th>
-                    <th className="text-left px-4 py-3 text-sm font-medium text-slate-600">Current Step</th>
+                    <th>Employee</th>
+                    <th>Category</th>
+                    <th>Description</th>
+                    <th style={{ textAlign: "right" }}>Amount</th>
+                    <th>Status</th>
+                    <th>Current Step</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody>
                   {expenses.map(expense => (
-                    <tr
-                      key={expense.id}
-                      onClick={() => navigate(`/app/expenses/${expense.id}`)}
-                      className="hover:bg-slate-50 transition-colors cursor-pointer"
-                    >
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <div className="w-8 h-8 bg-indigo-100 rounded-full flex items-center justify-center text-sm font-medium text-indigo-600">
+                    <tr key={expense.id} onClick={() => navigate(`/app/expenses/${expense.id}`)} className="cursor-pointer group hover:bg-slate-50/50">
+                      <td>
+                        <div className="flex items-center gap-3">
+                          <div className="avatar avatar-sm rounded-lg bg-indigo-50 text-indigo-600 font-bold border border-indigo-100">
                             {(expense.employee_name || expense.user_email || "U")[0].toUpperCase()}
                           </div>
                           <div>
-                            <p className="font-medium text-slate-900 text-sm">
+                            <p className="font-bold text-[13px] text-slate-900 leading-tight group-hover:text-indigo-600 transition-colors">
                               {expense.employee_name || "Unknown"}
                             </p>
-                            <p className="text-xs text-slate-500">{expense.job_title || "Employee"}</p>
+                            <p className="text-[11px] text-slate-500 font-medium">
+                              {expense.job_title || "Employee"} • <Calendar size={10} className="inline mr-0.5 relative -top-[1px]" />{formatDate(expense.expense_date)}
+                            </p>
                           </div>
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-sm text-slate-600">
-                        {formatDate(expense.expense_date)}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <span className="text-lg">{CATEGORY_ICONS[expense.category] || "📦"}</span>
-                          <span className="text-sm text-slate-700 capitalize">
+                      <td>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-base">{CATEGORY_ICONS[expense.category] || "📦"}</span>
+                          <span className="text-xs font-medium text-slate-600 capitalize">
                             {expense.category?.replace("_", " ")}
                           </span>
                         </div>
                       </td>
-                      <td className="px-4 py-3">
-                        <p className="text-sm text-slate-900 truncate max-w-xs">
+                      <td>
+                        <p className="text-[13px] text-slate-700 font-medium truncate max-w-[200px]">
                           {expense.description || expense.merchant_name || "-"}
                         </p>
                       </td>
-                      <td className="px-4 py-3 text-right">
-                        <p className="font-semibold text-slate-900">
-                          {formatCurrency(expense.amount, expense.currency_code || "USD")}
+                      <td style={{ textAlign: "right" }}>
+                        <p className="font-bold text-[14px] font-heading text-slate-900">
+                          {formatCurrency(expense.amount, expense.currency_code || "INR")}
                         </p>
                         {expense.converted_amount && expense.currency_code !== expense.company_currency_code && (
-                          <p className="text-xs text-slate-500">
-                            ~ {formatCurrency(expense.converted_amount, expense.company_currency_code)}
+                          <p className="text-[11px] font-semibold text-slate-500">
+                            ≈ {formatCurrency(expense.converted_amount, expense.company_currency_code)}
                           </p>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-center">
-                        <span className={`px-2 py-1 text-xs rounded-full font-medium ${STATUS_COLORS[expense.status]}`}>
-                          {STATUS_LABELS[expense.status]}
+                      <td>
+                        <span className={`badge ${getStatusBadge(expense.status)} capitalize text-[10px]`}>
+                          {expense.status.replace("_", " ")}
                         </span>
                       </td>
-                      <td className="px-4 py-3">
+                      <td>
                         {expense.status === "pending" && expense.current_approver_name ? (
-                          <div>
-                            <p className="text-sm text-slate-700">
-                              Waiting on: <span className="font-medium">{expense.current_approver_name}</span>
-                            </p>
-                            <p className="text-xs text-slate-500">
-                              {getWaitingTime(expense.created_at)} ago
-                            </p>
+                          <div className="flex flex-col">
+                            <span className="text-[11px] font-bold text-slate-700 truncate max-w-[140px]">
+                              Waiting: {expense.current_approver_name}
+                            </span>
+                            <span className="text-[10px] font-semibold text-amber-600">
+                              <Clock size={10} className="inline mr-1" />{getWaitingTime(expense.created_at)}
+                            </span>
                           </div>
-                        ) : expense.status === "approved" ? (
-                          <span className="text-sm text-green-600">Completed</span>
+                        ) : expense.status === "approved" || expense.status === "paid" ? (
+                          <span className="text-[11px] font-bold text-green-600 flex items-center gap-1">
+                            <CheckCircle2 size={12} /> Resolved
+                          </span>
                         ) : expense.status === "rejected" ? (
-                          <span className="text-sm text-red-600">Rejected</span>
+                          <span className="text-[11px] font-bold text-red-600 flex items-center gap-1">
+                            <XCircle size={12} /> Closed
+                          </span>
                         ) : (
-                          <span className="text-sm text-slate-400">-</span>
+                          <span className="text-slate-400">-</span>
                         )}
                       </td>
                     </tr>
@@ -293,15 +230,14 @@ export function TeamExpensesPage() {
               </table>
             </div>
           )}
-        </div>
+        </motion.div>
 
-        {/* Note */}
-        <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-          <p className="text-sm text-blue-700">
-            <span className="font-medium">Note:</span> This is a read-only view of your team's expenses. 
-            To approve or reject expenses, use the <a href="/app/approvals" className="underline hover:text-blue-800">Approvals</a> page.
+        <motion.div {...fadeIn(0.2)} className="mt-6 flex items-start gap-3 p-4 rounded-xl bg-blue-50 border border-blue-100/50">
+          <Info className="text-blue-500 shrink-0 mt-0.5" size={18} />
+          <p className="text-[13px] text-blue-800 font-medium">
+            This is a read-only view of your team's expenses. To directly approve or reject pending requests, please use the <Link to="/app/approvals" className="font-bold underline hover:text-blue-900">Approvals Page</Link>.
           </p>
-        </div>
+        </motion.div>
       </div>
     </DashboardLayout>
   );
