@@ -136,7 +136,8 @@ router.get("/health", authenticateUser, async (req, res) => {
  * POST /api/admin/expenses/:expenseId/force-approve
  * Force approve an expense (Admin override)
  * Requires reason with minimum 20 characters
- * Creates audit trail and cancels all pending approvals
+ * Creates audit trail, cancels all pending approvals,
+ * and notifies skipped approvers + other admins
  */
 router.post("/expenses/:expenseId/force-approve", authenticateUser, async (req, res) => {
   try {
@@ -190,15 +191,19 @@ router.post("/expenses/:expenseId/force-approve", authenticateUser, async (req, 
       });
     }
 
-    // Cancel all pending approval logs for this expense
+    // ═══════════════════════════════════════════════════════════════
+    // Cancel all pending/locked approval logs for this expense
+    // FIXED: Use correct column names (action, comment, updated_at)
+    // ═══════════════════════════════════════════════════════════════
     const { data: cancelledLogs } = await supabase
       .from("approval_logs")
       .update({ 
-        status: 'skipped',
-        notes: `Skipped due to admin override by ${profile.email}`
+        action: 'SKIPPED',
+        comment: `Skipped due to admin override by ${profile.email}`,
+        updated_at: new Date().toISOString()
       })
       .eq("expense_id", expenseId)
-      .eq("status", "pending")
+      .in("action", ['PENDING', 'LOCKED'])
       .select();
 
     // Update expense status to approved
@@ -214,17 +219,21 @@ router.post("/expenses/:expenseId/force-approve", authenticateUser, async (req, 
 
     if (updateError) throw updateError;
 
+    // ═══════════════════════════════════════════════════════════════
     // Create admin override approval log
+    // FIXED: Use correct column names and types
+    // ═══════════════════════════════════════════════════════════════
     await supabase
       .from("approval_logs")
       .insert({
         expense_id: expenseId,
         approver_id: userId,
-        step_index: -1, // Special index for override
-        status: 'approved',
-        is_parallel: false,
-        notes: `ADMIN OVERRIDE: ${reason.trim()}`,
-        decided_at: new Date().toISOString()
+        step_order: -1,
+        type: 'SEQUENTIAL',
+        is_required: false,
+        action: 'APPROVED',
+        comment: `ADMIN OVERRIDE: ${reason.trim()}`,
+        updated_at: new Date().toISOString()
       });
 
     // Create audit log
@@ -248,6 +257,66 @@ router.post("/expenses/:expenseId/force-approve", authenticateUser, async (req, 
         company_id: profile.company_id
       });
 
+    // ═══════════════════════════════════════════════════════════════
+    // NOTIFICATIONS — Required by spec:
+    // 1. Notify the employee that their expense was force-approved
+    // 2. Notify every skipped approver
+    // 3. Notify every OTHER admin in the company
+    // ═══════════════════════════════════════════════════════════════
+    const notifications = [];
+
+    // 1. Notify the employee
+    if (expense.employee_id) {
+      notifications.push({
+        user_id: expense.employee_id,
+        message: `Your expense "${expense.description}" has been approved by admin (${profile.email}). Override reason: ${reason.trim()}`,
+        expense_id: expenseId,
+        type: 'expense_approved',
+        is_read: false
+      });
+    }
+
+    // 2. Notify every skipped approver
+    if (cancelledLogs && cancelledLogs.length > 0) {
+      const skippedApproverIds = [...new Set(cancelledLogs.map(l => l.approver_id))];
+      for (const approverId of skippedApproverIds) {
+        if (approverId !== userId) { // Don't notify the admin who did the override
+          notifications.push({
+            user_id: approverId,
+            message: `An expense you were assigned to approve ("${expense.description}") was force-approved by admin (${profile.email}). Your approval was skipped.`,
+            expense_id: expenseId,
+            type: 'general',
+            is_read: false
+          });
+        }
+      }
+    }
+
+    // 3. Notify every OTHER admin in the company
+    const { data: otherAdmins } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("company_id", profile.company_id)
+      .eq("role", "admin")
+      .neq("id", userId);
+
+    if (otherAdmins && otherAdmins.length > 0) {
+      for (const admin of otherAdmins) {
+        notifications.push({
+          user_id: admin.id,
+          message: `Admin ${profile.email} force-approved expense "${expense.description}" (${expense.converted_amount || expense.amount} ${expense.company_currency || expense.currency}). Reason: ${reason.trim()}`,
+          expense_id: expenseId,
+          type: 'general',
+          is_read: false
+        });
+      }
+    }
+
+    // Insert all notifications
+    if (notifications.length > 0) {
+      await supabase.from("notifications").insert(notifications);
+    }
+
     res.json({
       message: "Expense force approved successfully",
       expense: updatedExpense,
@@ -255,6 +324,7 @@ router.post("/expenses/:expenseId/force-approve", authenticateUser, async (req, 
         admin: profile.email,
         reason: reason.trim(),
         skipped_approvals: cancelledLogs?.length || 0,
+        notifications_sent: notifications.length,
         timestamp: new Date().toISOString()
       }
     });
@@ -392,6 +462,79 @@ router.get("/audit-logs", authenticateUser, async (req, res) => {
     res.json({ logs });
   } catch (error) {
     console.error("Error getting audit logs:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/admin/debug/tenancy
+ * Debug endpoint to check multi-tenancy state
+ * Shows company distribution of all profiles
+ */
+router.get("/debug/tenancy", authenticateUser, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Verify user is admin
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("role, company_id")
+      .eq("id", userId)
+      .single();
+
+    if (profile?.role !== 'admin') {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+
+    // Get all companies
+    const { data: companies } = await supabase
+      .from("companies")
+      .select("id, name");
+
+    // Get all profiles with company info
+    const { data: profiles } = await supabase
+      .from("profiles")
+      .select("id, email, role, company_id");
+
+    // Group profiles by company
+    const profilesByCompany = {};
+    const orphanedProfiles = [];
+
+    for (const p of profiles || []) {
+      if (!p.company_id) {
+        orphanedProfiles.push({ id: p.id, email: p.email, role: p.role });
+      } else {
+        if (!profilesByCompany[p.company_id]) {
+          profilesByCompany[p.company_id] = [];
+        }
+        profilesByCompany[p.company_id].push({ id: p.id, email: p.email, role: p.role });
+      }
+    }
+
+    // Build summary
+    const companySummary = (companies || []).map(c => ({
+      company_id: c.id,
+      company_name: c.name,
+      user_count: profilesByCompany[c.id]?.length || 0,
+      users: profilesByCompany[c.id] || []
+    }));
+
+    res.json({
+      current_user: {
+        id: userId,
+        company_id: profile.company_id
+      },
+      total_companies: companies?.length || 0,
+      total_profiles: profiles?.length || 0,
+      orphaned_profiles_count: orphanedProfiles.length,
+      orphaned_profiles: orphanedProfiles,
+      companies: companySummary,
+      message: orphanedProfiles.length > 0 
+        ? "WARNING: Some profiles have no company_id!" 
+        : "All profiles have company_id assigned"
+    });
+  } catch (error) {
+    console.error("Error in debug/tenancy:", error);
     res.status(500).json({ error: error.message });
   }
 });
