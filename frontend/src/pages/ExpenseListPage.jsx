@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { DashboardLayout } from "../components/DashboardLayout";
 import { expenseApi } from "../lib/api";
 
@@ -8,7 +8,8 @@ const STATUS_COLORS = {
   pending: "bg-yellow-100 text-yellow-700",
   approved: "bg-green-100 text-green-700",
   rejected: "bg-red-100 text-red-700",
-  partially_approved: "bg-blue-100 text-blue-700"
+  paid: "bg-blue-100 text-blue-700",
+  partially_approved: "bg-purple-100 text-purple-700"
 };
 
 const STATUS_LABELS = {
@@ -16,7 +17,8 @@ const STATUS_LABELS = {
   pending: "Pending",
   approved: "Approved",
   rejected: "Rejected",
-  partially_approved: "Partially Approved"
+  paid: "Paid",
+  partially_approved: "Partial"
 };
 
 const CATEGORY_ICONS = {
@@ -33,6 +35,7 @@ const CATEGORY_ICONS = {
 };
 
 export function ExpenseListPage() {
+  const navigate = useNavigate();
   const [expenses, setExpenses] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -69,11 +72,25 @@ export function ExpenseListPage() {
     }
   };
 
-  const formatCurrency = (amount, currency = "USD") => {
-    return new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: currency
-    }).format(amount);
+  const formatCurrency = (amount, currency = "INR") => {
+    // Use safe fallback for currencies
+    try {
+      return new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: currency || "INR"
+      }).format(amount);
+    } catch (error) {
+      // Fallback if currency code is invalid
+      return `${currency} ${Number(amount).toFixed(2)}`;
+    }
+  };
+
+  const getCurrencySymbol = (currency) => {
+    const symbols = {
+      'INR': '₹', 'USD': '$', 'EUR': '€', 'GBP': '£', 'AUD': 'A$',
+      'CAD': 'C$', 'SGD': 'S$', 'AED': 'د.إ', 'JPY': '¥', 'CNY': '¥'
+    };
+    return symbols[currency] || currency;
   };
 
   const formatDate = (dateStr) => {
@@ -131,7 +148,7 @@ export function ExpenseListPage() {
 
         {/* Filters */}
         <div className="flex gap-2 mb-6 flex-wrap">
-          {["all", "pending", "approved", "rejected"].map(status => (
+          {["all", "pending", "approved", "rejected", "paid"].map(status => (
             <button
               key={status}
               onClick={() => setFilter(status)}
@@ -154,7 +171,7 @@ export function ExpenseListPage() {
         )}
 
         {/* Expense List */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200">
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
           {isLoading ? (
             <div className="p-8 text-center text-slate-500">
               <span className="animate-spin inline-block text-2xl mb-2">⏳</span>
@@ -172,52 +189,100 @@ export function ExpenseListPage() {
               </Link>
             </div>
           ) : (
-            <div className="divide-y divide-slate-100">
-              {expenses.map(expense => (
-                <div
-                  key={expense.id}
-                  className="p-4 hover:bg-slate-50 transition-colors flex items-center gap-4"
-                >
-                  {/* Category Icon */}
-                  <div className="w-12 h-12 bg-slate-100 rounded-lg flex items-center justify-center text-2xl">
-                    {CATEGORY_ICONS[expense.category] || "📦"}
-                  </div>
-
-                  {/* Details */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <h3 className="font-medium text-slate-900 truncate">
-                        {expense.merchant_name || expense.description || "Expense"}
-                      </h3>
-                      <span className={`px-2 py-0.5 text-xs rounded-full ${STATUS_COLORS[expense.status]}`}>
-                        {STATUS_LABELS[expense.status]}
-                      </span>
-                    </div>
-                    <p className="text-sm text-slate-500">
-                      {expense.category?.replace("_", " ")} • {formatDate(expense.expense_date)}
-                    </p>
-                  </div>
-
-                  {/* Amount */}
-                  <div className="text-right">
-                    <p className="font-semibold text-slate-900">
-                      {formatCurrency(expense.amount, expense.currency_code)}
-                    </p>
-                    {expense.converted_amount && expense.currency_code !== expense.company_currency_code && (
-                      <p className="text-xs text-slate-500">
-                        ≈ {formatCurrency(expense.converted_amount, expense.company_currency_code)}
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Receipt indicator */}
-                  {expense.receipt_url && (
-                    <div className="text-slate-400" title="Has receipt">
-                      📎
-                    </div>
-                  )}
-                </div>
-              ))}
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-slate-50 border-b border-slate-200">
+                  <tr>
+                    <th className="text-left px-4 py-3 text-sm font-medium text-slate-600">Date</th>
+                    <th className="text-left px-4 py-3 text-sm font-medium text-slate-600">Category</th>
+                    <th className="text-left px-4 py-3 text-sm font-medium text-slate-600">Description</th>
+                    <th className="text-right px-4 py-3 text-sm font-medium text-slate-600">Original Amount</th>
+                    <th className="text-right px-4 py-3 text-sm font-medium text-slate-600">Converted Amount</th>
+                    <th className="text-center px-4 py-3 text-sm font-medium text-slate-600">Status</th>
+                    <th className="text-left px-4 py-3 text-sm font-medium text-slate-600">Current Step</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {expenses.map(expense => (
+                    <tr
+                      key={expense.id}
+                      onClick={() => navigate(`/app/expenses/${expense.id}`)}
+                      className="hover:bg-slate-50 transition-colors cursor-pointer"
+                    >
+                      <td className="px-4 py-3 text-sm text-slate-600">
+                        {formatDate(expense.expense_date)}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <span className="text-lg">{CATEGORY_ICONS[expense.category] || "📦"}</span>
+                          <span className="text-sm text-slate-700 capitalize">
+                            {expense.category?.replace("_", " ")}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <p className="text-sm font-medium text-slate-900 truncate max-w-xs">
+                          {expense.merchant_name || expense.description || "Expense"}
+                        </p>
+                        {expense.receipt_url && (
+                          <span className="text-slate-400 text-xs">📎 Receipt attached</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <div className="text-sm">
+                          <p className="font-semibold text-slate-900">
+                            {getCurrencySymbol(expense.original_currency || expense.currency || 'INR')}
+                            {(expense.original_amount || expense.amount || 0).toFixed(2)}
+                          </p>
+                          <p className="text-xs text-slate-500">
+                            {expense.original_currency || expense.currency || 'INR'}
+                          </p>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        {expense.original_currency !== expense.company_currency && expense.converted_amount ? (
+                          <div className="text-sm">
+                            <p className="font-medium text-indigo-700">
+                              {getCurrencySymbol(expense.company_currency || 'INR')}
+                              {expense.converted_amount.toFixed(2)}
+                            </p>
+                            <p className="text-xs text-slate-500">
+                              {expense.company_currency || 'INR'}
+                            </p>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-slate-400">Same currency</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <span className={`px-2 py-1 text-xs rounded-full font-medium ${STATUS_COLORS[expense.status]}`}>
+                          {STATUS_LABELS[expense.status]}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        {expense.status === "pending" && expense.current_approver_name ? (
+                          <div>
+                            <p className="text-sm text-slate-700">
+                              Waiting on: <span className="font-medium text-indigo-600">{expense.current_approver_name}</span>
+                            </p>
+                            {expense.current_approver_job_title && (
+                              <p className="text-xs text-slate-500">{expense.current_approver_job_title}</p>
+                            )}
+                          </div>
+                        ) : expense.status === "approved" ? (
+                          <span className="text-sm text-green-600 font-medium">Fully Approved</span>
+                        ) : expense.status === "rejected" ? (
+                          <span className="text-sm text-red-600 font-medium">Rejected</span>
+                        ) : expense.status === "paid" ? (
+                          <span className="text-sm text-blue-600 font-medium">Payment Complete</span>
+                        ) : (
+                          <span className="text-sm text-slate-400">-</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </div>

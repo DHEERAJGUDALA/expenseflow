@@ -46,21 +46,37 @@ const DATE_PATTERNS = [
  */
 export async function extractTextFromImage(imageBuffer) {
   try {
+    console.log("🔍 Starting OCR extraction...");
+    console.log("Image buffer size:", imageBuffer.length, "bytes");
+
     const { data: { text, confidence } } = await Tesseract.recognize(
       imageBuffer,
       "eng",
       {
-        logger: m => console.log(`OCR Progress: ${m.status} - ${Math.round(m.progress * 100)}%`)
+        logger: (m) => {
+          if (m.status === 'recognizing text') {
+            console.log(`OCR Progress: ${m.status} - ${Math.round(m.progress * 100)}%`);
+          }
+        }
       }
     );
+
+    console.log("✅ OCR extraction complete");
+    console.log("Confidence:", confidence);
+    console.log("Text length:", text.length);
+    console.log("First 200 chars:", text.substring(0, 200));
+
+    if (!text || text.trim().length === 0) {
+      throw new Error("No text could be extracted from the image. Please ensure the image is clear and contains readable text.");
+    }
 
     return {
       rawText: text,
       confidence: confidence
     };
   } catch (error) {
-    console.error("OCR Error:", error);
-    throw new Error("Failed to extract text from image");
+    console.error("❌ OCR Error:", error);
+    throw new Error(`Failed to extract text from image: ${error.message}`);
   }
 }
 
@@ -312,8 +328,12 @@ function extractLineItems(text) {
  * Main function to parse receipt and extract structured data
  */
 export async function parseReceipt(imageBuffer) {
+  console.log("📄 Starting receipt parsing...");
+  
   // Extract raw text
   const { rawText, confidence } = await extractTextFromImage(imageBuffer);
+  
+  console.log("Analyzing extracted text...");
   
   // Extract structured data
   const amounts = extractAmounts(rawText);
@@ -321,6 +341,13 @@ export async function parseReceipt(imageBuffer) {
   const category = detectCategory(rawText);
   const merchantName = extractMerchantName(rawText);
   const lineItems = extractLineItems(rawText);
+
+  console.log("Extraction results:");
+  console.log("- Amounts found:", amounts.length);
+  console.log("- Dates found:", dates.length);
+  console.log("- Category:", category);
+  console.log("- Merchant:", merchantName);
+  console.log("- Line items:", lineItems.length);
 
   // Find the most likely total amount
   let totalAmount = null;
@@ -332,11 +359,15 @@ export async function parseReceipt(imageBuffer) {
     // Get the largest total
     totalAmount = Math.max(...totalAmounts.map(a => a.value));
     currency = totalAmounts[0].currency;
+    console.log("✓ Found total amount:", totalAmount, currency);
   } else if (amounts.length > 0) {
     // Second priority: the largest amount
     const maxAmount = amounts.reduce((max, a) => a.value > max.value ? a : max, amounts[0]);
     totalAmount = maxAmount.value;
     currency = maxAmount.currency;
+    console.log("✓ Using largest amount:", totalAmount, currency);
+  } else {
+    console.warn("⚠️  No amounts found in receipt");
   }
 
   // Find the most recent/likely expense date
@@ -346,6 +377,7 @@ export async function parseReceipt(imageBuffer) {
     const highConfidenceDates = dates.filter(d => d.confidence === "high");
     if (highConfidenceDates.length > 0) {
       expenseDate = highConfidenceDates[0].date;
+      console.log("✓ Found high-confidence date:", expenseDate);
     } else {
       // Sort by date - prefer dates closest to today (not future dates)
       const today = new Date();
@@ -359,10 +391,13 @@ export async function parseReceipt(imageBuffer) {
         return dateB - dateA;
       });
       expenseDate = dates[0].date;
+      console.log("✓ Using most recent date:", expenseDate);
     }
+  } else {
+    console.warn("⚠️  No dates found in receipt");
   }
 
-  return {
+  const result = {
     // Extracted data
     amount: totalAmount,
     currency: currency,
@@ -384,6 +419,9 @@ export async function parseReceipt(imageBuffer) {
         : `${category.charAt(0).toUpperCase() + category.slice(1)} expense`,
     }
   };
+
+  console.log("✅ Receipt parsing complete");
+  return result;
 }
 
 /**

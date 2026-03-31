@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { NotificationBell } from "./NotificationBell";
 
 export function DashboardLayout({ children }) {
   const { user, signOut } = useAuth();
@@ -16,7 +17,8 @@ export function DashboardLayout({ children }) {
     { name: "Submit Expense", href: "/app/expenses/new", icon: "➕", roles: ["employee", "manager", "admin"] },
     { name: "My Expenses", href: "/app/expenses", icon: "📋", roles: ["employee", "manager", "admin"] },
     { name: "Approvals", href: "/app/approvals", icon: "✅", roles: ["admin", "manager"] },
-    { name: "Employees", href: "/app/employees", icon: "👥", roles: ["admin"] },
+    { name: "Team Expenses", href: "/app/team-expenses", icon: "👥", roles: ["admin", "manager"] },
+    { name: "Employees", href: "/app/employees", icon: "🧑‍💼", roles: ["admin"] },
   ];
 
   const filteredNav = navigation.filter(item => item.roles.includes(role));
@@ -72,11 +74,12 @@ export function DashboardLayout({ children }) {
               {fullName?.charAt(0).toUpperCase()}
             </div>
             {sidebarOpen && (
-              <div className="overflow-hidden">
+              <div className="overflow-hidden flex-1">
                 <p className="font-medium truncate">{fullName}</p>
                 <p className="text-xs text-slate-400 capitalize">{role}</p>
               </div>
             )}
+            {sidebarOpen && <NotificationBell />}
           </div>
           <button
             onClick={handleSignOut}

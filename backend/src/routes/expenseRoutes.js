@@ -7,7 +7,10 @@ import {
   updateExpense,
   deleteExpense,
   getExpenseStats,
-  getConversionRate
+  getConversionRate,
+  getTeamExpenses,
+  getCategories,
+  getAvailableCurrencies
 } from "../controllers/expenseController.js";
 import { authenticateUser } from "../middleware/authMiddleware.js";
 
@@ -17,6 +20,9 @@ const router = express.Router();
 router.get("/my-expenses", authenticateUser, getMyExpenses);
 router.get("/stats", authenticateUser, getExpenseStats);
 router.get("/convert", authenticateUser, getConversionRate);
+router.get("/categories", authenticateUser, getCategories);
+router.get("/currencies", authenticateUser, getAvailableCurrencies);
+router.get("/team", authenticateUser, getTeamExpenses);
 
 // CRUD operations
 router.post("/", authenticateUser, createExpense);

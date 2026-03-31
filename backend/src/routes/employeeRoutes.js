@@ -8,7 +8,8 @@ import {
   assignManager,
   getMyTeam,
   getMyProfile,
-  getManagers
+  getManagers,
+  resendPasswordReset
 } from "../controllers/employeeController.js";
 import { authenticateUser } from "../middleware/authMiddleware.js";
 
@@ -26,5 +27,6 @@ router.post("/", authenticateUser, createEmployee);
 router.put("/:id", authenticateUser, updateEmployee);
 router.delete("/:id", authenticateUser, deleteEmployee);
 router.post("/assign-manager", authenticateUser, assignManager);
+router.post("/:id/resend-password-reset", authenticateUser, resendPasswordReset);
 
 export default router;

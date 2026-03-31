@@ -78,7 +78,7 @@ export const getEmployeeById = async (req, res) => {
  */
 export const createEmployee = async (req, res) => {
   try {
-    const { email, role, manager_id } = req.body;
+    const { email, role, manager_id, full_name, job_title } = req.body;
     const adminUserId = req.user.id;
     const userMetadataRole = req.user.user_metadata?.role;
 
@@ -96,7 +96,7 @@ export const createEmployee = async (req, res) => {
     // Verify admin role - check both profile table and user_metadata
     const { data: adminProfile, error: adminError } = await supabase
       .from("profiles")
-      .select("role")
+      .select("role, company_id")
       .eq("id", adminUserId)
       .single();
 
@@ -136,7 +136,9 @@ export const createEmployee = async (req, res) => {
         password: tempPassword,
         email_confirm: true, // Auto-confirm email to skip email verification
         user_metadata: {
-          role: role || "employee"
+          role: role || "employee",
+          full_name: full_name || "",
+          job_title: job_title || ""
         }
       });
 
@@ -157,16 +159,38 @@ export const createEmployee = async (req, res) => {
         id: userId,
         email,
         role: role || "employee",
-        manager_id: manager_id || null
+        manager_id: manager_id || null,
+        company_id: adminProfile?.company_id || null,
+        full_name: full_name || null,
+        job_title: job_title || null
       })
       .select()
       .single();
 
     if (profileError) throw profileError;
 
+    // Send password reset email so the employee can set their own password
+    let resetEmailSent = false;
+    try {
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/reset-password`
+      });
+      
+      if (!resetError) {
+        resetEmailSent = true;
+      } else {
+        console.error("Failed to send password reset email:", resetError);
+      }
+    } catch (resetErr) {
+      console.error("Error sending password reset email:", resetErr);
+    }
+
     res.status(201).json({ 
       employee: profile, 
-      message: "Employee created successfully (password reset link should be sent manually)" 
+      resetEmailSent,
+      message: resetEmailSent 
+        ? "Employee created successfully. A password reset link has been sent to their email." 
+        : "Employee created successfully. Please send them a password reset link manually."
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -409,13 +433,65 @@ export const getManagers = async (req, res) => {
     // Get all managers and admins
     const { data: managers, error } = await supabase
       .from("profiles")
-      .select("id, email, role")
+      .select("id, email, role, full_name, job_title")
       .in("role", ["manager", "admin"])
       .order("email");
 
     if (error) throw error;
 
     res.json({ managers });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * Resend password reset email to an employee (Admin only)
+ */
+export const resendPasswordReset = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const adminUserId = req.user.id;
+    const userMetadataRole = req.user.user_metadata?.role;
+
+    // Verify admin role
+    const { data: adminProfile, error: adminError } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", adminUserId)
+      .single();
+
+    const profileRole = adminProfile?.role;
+    const isAdmin = profileRole === "admin" || userMetadataRole === "admin";
+
+    if (!isAdmin) {
+      return res.status(403).json({ error: "Only admins can resend password reset emails" });
+    }
+
+    // Get employee's email
+    const { data: employee, error: empError } = await supabase
+      .from("profiles")
+      .select("email")
+      .eq("id", id)
+      .single();
+
+    if (empError || !employee) {
+      return res.status(404).json({ error: "Employee not found" });
+    }
+
+    // Send password reset email
+    const { error: resetError } = await supabase.auth.resetPasswordForEmail(employee.email, {
+      redirectTo: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/reset-password`
+    });
+
+    if (resetError) {
+      throw resetError;
+    }
+
+    res.json({ 
+      message: `Password reset link sent to ${employee.email}`,
+      email: employee.email
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

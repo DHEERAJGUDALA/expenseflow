@@ -8,6 +8,7 @@ import { v4 as uuidv4 } from "uuid";
  */
 export const scanReceipt = async (req, res) => {
   try {
+    console.log("=== OCR SCAN REQUEST ===");
     const { image_base64, image_url } = req.body;
 
     if (!image_base64 && !image_url) {
@@ -20,14 +21,27 @@ export const scanReceipt = async (req, res) => {
 
     if (image_url) {
       // Process from URL
+      console.log("Processing from URL:", image_url);
       result = await parseReceiptFromUrl(image_url);
     } else {
       // Process from base64
+      console.log("Processing from base64, length:", image_base64.length);
+      
       // Remove data URL prefix if present
       const base64Data = image_base64.replace(/^data:image\/\w+;base64,/, "");
       const buffer = Buffer.from(base64Data, "base64");
+      
+      console.log("Buffer created, size:", buffer.length, "bytes");
+      
       result = await parseReceipt(buffer);
     }
+
+    console.log("=== OCR SCAN SUCCESS ===");
+    console.log("Amount:", result.amount);
+    console.log("Currency:", result.currency);
+    console.log("Date:", result.date);
+    console.log("Category:", result.category);
+    console.log("Merchant:", result.merchant_name);
 
     res.json({
       success: true,
@@ -44,8 +58,14 @@ export const scanReceipt = async (req, res) => {
       }
     });
   } catch (err) {
-    console.error("OCR Scan Error:", err);
-    res.status(500).json({ error: err.message });
+    console.error("=== OCR SCAN ERROR ===");
+    console.error("Error:", err);
+    console.error("Stack:", err.stack);
+    
+    res.status(500).json({ 
+      error: err.message,
+      details: process.env.NODE_ENV === "development" ? err.stack : undefined
+    });
   }
 };
 

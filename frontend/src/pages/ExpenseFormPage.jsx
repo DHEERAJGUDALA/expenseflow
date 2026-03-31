@@ -1,9 +1,11 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { DashboardLayout } from "../components/DashboardLayout";
-import { expenseApi, ocrApi } from "../lib/api";
+import ApprovalLifecycleVisualizer from "../components/ApprovalLifecycleVisualizer";
+import { expenseApi, ocrApi, companyApi, approvalPreviewApi } from "../lib/api";
 
-const CATEGORIES = [
+// Fallback categories if API fails
+const DEFAULT_CATEGORIES = [
   { value: "meals", label: "Meals & Food" },
   { value: "travel", label: "Travel" },
   { value: "accommodation", label: "Accommodation" },
@@ -16,27 +18,58 @@ const CATEGORIES = [
   { value: "other", label: "Other" }
 ];
 
-const CURRENCIES = [
-  { value: "USD", label: "USD ($)", symbol: "$" },
-  { value: "EUR", label: "EUR (€)", symbol: "€" },
-  { value: "GBP", label: "GBP (£)", symbol: "£" },
-  { value: "INR", label: "INR (₹)", symbol: "₹" },
-  { value: "JPY", label: "JPY (¥)", symbol: "¥" }
+// Fallback currencies if API fails
+const DEFAULT_CURRENCIES = [
+  { code: "INR", name: "Indian Rupee", symbol: "₹" },
+  { code: "USD", name: "US Dollar", symbol: "$" },
+  { code: "EUR", name: "Euro", symbol: "€" },
+  { code: "GBP", name: "British Pound", symbol: "£" },
+  { code: "AUD", name: "Australian Dollar", symbol: "A$" },
+  { code: "CAD", name: "Canadian Dollar", symbol: "C$" },
+  { code: "SGD", name: "Singapore Dollar", symbol: "S$" },
+  { code: "AED", name: "UAE Dirham", symbol: "د.إ" },
+  { code: "JPY", name: "Japanese Yen", symbol: "¥" },
+  { code: "CNY", name: "Chinese Yuan", symbol: "¥" }
 ];
 
 export function ExpenseFormPage() {
   const navigate = useNavigate();
   const fileInputRef = useRef(null);
 
+  // Categories from API
+  const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
+  const [loadingCategories, setLoadingCategories] = useState(true);
+
+  // Currencies from API
+  const [currencies, setCurrencies] = useState(DEFAULT_CURRENCIES);
+  const [loadingCurrencies, setLoadingCurrencies] = useState(true);
+
+  // Company currency (base currency for conversion)
+  const [companyCurrency, setCompanyCurrency] = useState({
+    code: "INR",
+    symbol: "₹",
+    name: "Indian Rupee"
+  });
+
   // Form state
   const [formData, setFormData] = useState({
     amount: "",
-    currency_code: "USD",
+    currency_code: "INR",  // Will be updated to company currency
     category: "",
     description: "",
     expense_date: new Date().toISOString().split("T")[0],
     merchant_name: ""
   });
+
+  // Live preview state
+  const [conversionPreview, setConversionPreview] = useState(null);
+  const [loadingConversion, setLoadingConversion] = useState(false);
+  const [conversionError, setConversionError] = useState(null);
+
+  // Approval preview state
+  const [approvalPreview, setApprovalPreview] = useState(null);
+  const [loadingApprovalPreview, setLoadingApprovalPreview] = useState(false);
+  const [approvalPreviewError, setApprovalPreviewError] = useState(null);
 
   // OCR state
   const [receiptImage, setReceiptImage] = useState(null);
@@ -49,6 +82,142 @@ export function ExpenseFormPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
+
+  // Fetch categories, currencies, and company info on mount
+  useEffect(() => {
+    const fetchInitialData = async () => {
+      // Fetch categories
+      try {
+        const catData = await expenseApi.getCategories();
+        if (catData.categories && catData.categories.length > 0) {
+          const apiCategories = catData.categories.map(cat => ({
+            value: typeof cat === 'string' ? cat.toLowerCase().replace(/\s+/g, "_") : cat.value,
+            label: typeof cat === 'string' ? cat.charAt(0).toUpperCase() + cat.slice(1).replace(/_/g, " ") : cat.label
+          }));
+          setCategories(apiCategories);
+        }
+      } catch (err) {
+        console.error("Failed to fetch categories, using defaults:", err);
+      } finally {
+        setLoadingCategories(false);
+      }
+
+      // Fetch currencies
+      try {
+        const currData = await expenseApi.getCurrencies();
+        if (currData.currencies && currData.currencies.length > 0) {
+          setCurrencies(currData.currencies);
+        }
+      } catch (err) {
+        console.error("Failed to fetch currencies, using defaults:", err);
+      } finally {
+        setLoadingCurrencies(false);
+      }
+
+      // Fetch company info to get base currency
+      try {
+        const companyData = await companyApi.getMyCompany();
+        if (companyData.company) {
+          const cc = {
+            code: companyData.company.currency_code || companyData.company.currency || "INR",
+            symbol: companyData.company.currency_symbol || "₹",
+            name: "Company Base Currency"
+          };
+          setCompanyCurrency(cc);
+          // Default expense currency to company currency
+          setFormData(prev => ({ ...prev, currency_code: cc.code }));
+        }
+      } catch (err) {
+        console.error("Failed to fetch company info:", err);
+      }
+    };
+
+    fetchInitialData();
+  }, []);
+
+  // Live conversion preview when amount or currency changes
+  useEffect(() => {
+    const fetchConversion = async () => {
+      const amount = parseFloat(formData.amount);
+      if (!amount || amount <= 0) {
+        setConversionPreview(null);
+        return;
+      }
+
+      // Same currency - no conversion needed
+      if (formData.currency_code === companyCurrency.code) {
+        setConversionPreview(null);
+        return;
+      }
+
+      setLoadingConversion(true);
+      setConversionError(null);
+
+      try {
+        const result = await expenseApi.getConversion(
+          formData.currency_code,
+          companyCurrency.code,
+          amount
+        );
+        setConversionPreview({
+          originalAmount: amount,
+          originalCurrency: formData.currency_code,
+          convertedAmount: result.converted_amount,
+          convertedCurrency: companyCurrency.code,
+          rate: result.rate,
+          fromSymbol: result.from_symbol,
+          toSymbol: result.to_symbol || companyCurrency.symbol
+        });
+      } catch (err) {
+        console.error("Conversion preview failed:", err);
+        setConversionError("Unable to fetch conversion rate. Please try again.");
+        setConversionPreview(null);
+      } finally {
+        setLoadingConversion(false);
+      }
+    };
+
+    // Debounce the conversion fetch
+    const timeoutId = setTimeout(fetchConversion, 500);
+    return () => clearTimeout(timeoutId);
+  }, [formData.amount, formData.currency_code, companyCurrency.code]);
+
+  // Fetch approval preview when amount or category changes
+  useEffect(() => {
+    const fetchApprovalPreview = async () => {
+      const amount = parseFloat(formData.amount);
+      
+      // Need both amount and category for accurate preview
+      if (!amount || amount <= 0 || !formData.category) {
+        setApprovalPreview(null);
+        return;
+      }
+
+      setLoadingApprovalPreview(true);
+      setApprovalPreviewError(null);
+
+      try {
+        const preview = await approvalPreviewApi.getPreview(amount, formData.category);
+        setApprovalPreview(preview);
+      } catch (err) {
+        console.error("Approval preview failed:", err);
+        setApprovalPreviewError(err.message || "Unable to load approval preview");
+        setApprovalPreview(null);
+      } finally {
+        setLoadingApprovalPreview(false);
+      }
+    };
+
+    // Debounce the approval preview fetch
+    const timeoutId = setTimeout(fetchApprovalPreview, 700);
+    return () => clearTimeout(timeoutId);
+  }, [formData.amount, formData.category]);
+
+  // Get currency symbol for display
+  const getCurrencySymbol = (code) => {
+    const currency = currencies.find(c => c.code === code);
+    return currency?.symbol || code;
+  };
 
   // Handle file selection
   const handleFileSelect = async (e) => {
@@ -307,14 +476,66 @@ export function ExpenseFormPage() {
                     name="currency_code"
                     value={formData.currency_code}
                     onChange={handleInputChange}
+                    disabled={loadingCurrencies}
                     className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
                   >
-                    {CURRENCIES.map(c => (
-                      <option key={c.value} value={c.value}>{c.label}</option>
+                    {currencies.map(c => (
+                      <option key={c.code} value={c.code}>
+                        {c.symbol} {c.code} - {c.name}
+                      </option>
                     ))}
                   </select>
+                  {formData.currency_code === companyCurrency.code && (
+                    <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                      Company base currency (no conversion needed)
+                    </p>
+                  )}
                 </div>
               </div>
+
+              {/* Live Conversion Preview */}
+              {conversionPreview && formData.amount && (
+                <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-medium text-blue-900">
+                      Live Conversion Preview
+                    </span>
+                    {loadingConversion && (
+                      <span className="text-xs text-blue-600 animate-pulse">Updating...</span>
+                    )}
+                  </div>
+                  <div className="flex items-center justify-between text-lg">
+                    <div className="text-blue-700">
+                      <span className="font-bold">
+                        {conversionPreview.fromSymbol}{conversionPreview.originalAmount.toFixed(2)}
+                      </span>
+                      <span className="text-sm ml-1">{conversionPreview.originalCurrency}</span>
+                    </div>
+                    <svg className="w-5 h-5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                    </svg>
+                    <div className="text-blue-900">
+                      <span className="font-bold">
+                        {conversionPreview.toSymbol}{conversionPreview.convertedAmount.toFixed(2)}
+                      </span>
+                      <span className="text-sm ml-1">{conversionPreview.convertedCurrency}</span>
+                    </div>
+                  </div>
+                  <p className="text-xs text-blue-600 mt-2">
+                    Exchange Rate: 1 {conversionPreview.originalCurrency} = {conversionPreview.rate.toFixed(4)} {conversionPreview.convertedCurrency}
+                  </p>
+                </div>
+              )}
+
+              {/* Conversion Error */}
+              {conversionError && formData.amount && formData.currency_code !== companyCurrency.code && (
+                <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-700">
+                  ⚠️ {conversionError}
+                </div>
+              )}
 
               {/* Category */}
               <div>
@@ -327,12 +548,20 @@ export function ExpenseFormPage() {
                   onChange={handleInputChange}
                   className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
                   required
+                  disabled={loadingCategories}
                 >
-                  <option value="">Select category</option>
-                  {CATEGORIES.map(c => (
+                  <option value="">
+                    {loadingCategories ? "Loading categories..." : "Select category"}
+                  </option>
+                  {categories.map(c => (
                     <option key={c.value} value={c.value}>{c.label}</option>
                   ))}
                 </select>
+                {!loadingCategories && categories.length > 0 && (
+                  <p className="text-xs text-slate-500 mt-1">
+                    Categories based on your company's approval rules
+                  </p>
+                )}
               </div>
 
               {/* Date */}
@@ -394,6 +623,17 @@ export function ExpenseFormPage() {
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {/* Approval Lifecycle Preview */}
+              {formData.amount && formData.category && (
+                <div className="pt-4 border-t border-slate-200">
+                  <ApprovalLifecycleVisualizer 
+                    preview={approvalPreview}
+                    loading={loadingApprovalPreview}
+                    error={approvalPreviewError}
+                  />
                 </div>
               )}
 

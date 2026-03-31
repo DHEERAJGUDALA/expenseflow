@@ -20,12 +20,15 @@ export function EmployeeManagementPage() {
   const [modalMode, setModalMode] = useState("create"); // create or edit
   const [selectedEmployee, setSelectedEmployee] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [resendingId, setResendingId] = useState(null);
 
   // Form state - matches database schema
   const [formData, setFormData] = useState({
     email: "",
     role: "employee",
-    manager_id: ""
+    manager_id: "",
+    full_name: "",
+    job_title: ""
   });
 
   useEffect(() => {
@@ -52,7 +55,9 @@ export function EmployeeManagementPage() {
     setFormData({
       email: "",
       role: "employee",
-      manager_id: ""
+      manager_id: "",
+      full_name: "",
+      job_title: ""
     });
     setModalMode("create");
     setShowModal(true);
@@ -63,7 +68,9 @@ export function EmployeeManagementPage() {
     setFormData({
       email: employee.email,
       role: employee.role,
-      manager_id: employee.manager_id || ""
+      manager_id: employee.manager_id || "",
+      full_name: employee.full_name || "",
+      job_title: employee.job_title || ""
     });
     setSelectedEmployee(employee);
     setModalMode("edit");
@@ -92,12 +99,19 @@ export function EmployeeManagementPage() {
 
     try {
       if (modalMode === "create") {
-        await employeeApi.create({
+        const result = await employeeApi.create({
           email: formData.email,
           role: formData.role,
-          manager_id: formData.manager_id || null
+          manager_id: formData.manager_id || null,
+          full_name: formData.full_name || null,
+          job_title: formData.job_title || null
         });
-        setSuccess("Employee created and invite sent!");
+        
+        if (result.resetEmailSent) {
+          setSuccess(`Employee created! A password reset link has been sent to ${formData.email}`);
+        } else {
+          setSuccess("Employee created! Please send them a password reset link manually.");
+        }
       } else {
         await employeeApi.update(selectedEmployee.id, {
           role: formData.role,
@@ -107,11 +121,24 @@ export function EmployeeManagementPage() {
       }
       closeModal();
       loadData();
-      setTimeout(() => setSuccess(null), 3000);
+      setTimeout(() => setSuccess(null), 5000);
     } catch (err) {
       setError(err.message);
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleResendPasswordReset = async (employee) => {
+    setResendingId(employee.id);
+    try {
+      await employeeApi.resendPasswordReset(employee.id);
+      setSuccess(`Password reset link sent to ${employee.email}`);
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setResendingId(null);
     }
   };
 
@@ -130,9 +157,10 @@ export function EmployeeManagementPage() {
     }
   };
 
-  // Helper to get display name (email username)
-  const getDisplayName = (email) => {
-    return email?.split("@")[0] || "Unknown";
+  // Helper to get display name
+  const getDisplayName = (employee) => {
+    if (employee.full_name) return employee.full_name;
+    return employee.email?.split("@")[0] || "Unknown";
   };
 
   return (
@@ -165,6 +193,14 @@ export function EmployeeManagementPage() {
             <button onClick={() => setSuccess(null)} className="text-green-500 hover:text-green-700">x</button>
           </div>
         )}
+
+        {/* Info Banner */}
+        <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+          <p className="text-sm text-blue-700">
+            <span className="font-medium">How onboarding works:</span> When you add an employee, they'll receive an email with a link to set their password. 
+            If they didn't receive it, use the "Resend Password" button.
+          </p>
+        </div>
 
         {/* Stats */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
@@ -221,11 +257,14 @@ export function EmployeeManagementPage() {
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
                         <div className="w-10 h-10 bg-slate-200 rounded-full flex items-center justify-center font-medium text-slate-600">
-                          {getDisplayName(employee.email)?.charAt(0).toUpperCase()}
+                          {getDisplayName(employee)?.charAt(0).toUpperCase()}
                         </div>
                         <div>
-                          <p className="font-medium text-slate-900">{getDisplayName(employee.email)}</p>
+                          <p className="font-medium text-slate-900">{getDisplayName(employee)}</p>
                           <p className="text-sm text-slate-500">{employee.email}</p>
+                          {employee.job_title && (
+                            <p className="text-xs text-slate-400">{employee.job_title}</p>
+                          )}
                         </div>
                       </div>
                     </td>
@@ -235,24 +274,34 @@ export function EmployeeManagementPage() {
                       </span>
                     </td>
                     <td className="px-4 py-3 text-slate-600">
-                      {employee.manager?.email ? getDisplayName(employee.manager.email) : "-"}
+                      {employee.manager?.email ? getDisplayName(employee.manager) : "-"}
                     </td>
                     <td className="px-4 py-3 text-slate-500 text-sm">
                       {new Date(employee.created_at).toLocaleDateString()}
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <button
-                        onClick={() => openEditModal(employee)}
-                        className="text-indigo-600 hover:text-indigo-700 text-sm font-medium mr-3"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        onClick={() => handleDelete(employee)}
-                        className="text-red-600 hover:text-red-700 text-sm font-medium"
-                      >
-                        Remove
-                      </button>
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={() => handleResendPasswordReset(employee)}
+                          disabled={resendingId === employee.id}
+                          className="text-amber-600 hover:text-amber-700 text-sm font-medium disabled:opacity-50"
+                          title="Resend password reset email"
+                        >
+                          {resendingId === employee.id ? "Sending..." : "Reset Pwd"}
+                        </button>
+                        <button
+                          onClick={() => openEditModal(employee)}
+                          className="text-indigo-600 hover:text-indigo-700 text-sm font-medium"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => handleDelete(employee)}
+                          className="text-red-600 hover:text-red-700 text-sm font-medium"
+                        >
+                          Remove
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -272,7 +321,7 @@ export function EmployeeManagementPage() {
               </h2>
               <p className="text-sm text-slate-500 mt-1">
                 {modalMode === "create" 
-                  ? "An email invite will be sent to the new employee" 
+                  ? "A password reset link will be sent to the new employee" 
                   : "Update employee role and manager assignment"}
               </p>
             </div>
@@ -282,6 +331,38 @@ export function EmployeeManagementPage() {
                 <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">
                   {error}
                 </div>
+              )}
+
+              {modalMode === "create" && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Full Name
+                    </label>
+                    <input
+                      type="text"
+                      name="full_name"
+                      value={formData.full_name}
+                      onChange={handleInputChange}
+                      placeholder="John Doe"
+                      className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Job Title
+                    </label>
+                    <input
+                      type="text"
+                      name="job_title"
+                      value={formData.job_title}
+                      onChange={handleInputChange}
+                      placeholder="Software Engineer"
+                      className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                    />
+                  </div>
+                </>
               )}
 
               <div>
@@ -339,7 +420,7 @@ export function EmployeeManagementPage() {
                     .filter(mgr => modalMode === "create" || mgr.id !== selectedEmployee?.id)
                     .map(mgr => (
                       <option key={mgr.id} value={mgr.id}>
-                        {getDisplayName(mgr.email)} ({mgr.role})
+                        {mgr.full_name || mgr.email?.split("@")[0]} ({mgr.role})
                       </option>
                     ))}
                 </select>
@@ -362,7 +443,7 @@ export function EmployeeManagementPage() {
                   {isSubmitting 
                     ? "Processing..." 
                     : modalMode === "create" 
-                      ? "Send Invite" 
+                      ? "Add & Send Invite" 
                       : "Save Changes"}
                 </button>
               </div>

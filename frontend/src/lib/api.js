@@ -80,6 +80,11 @@ export const employeeApi = {
   assignManager: (employeeId, managerId) => apiRequest("/employees/assign-manager", {
     method: "POST",
     body: JSON.stringify({ employee_id: employeeId, manager_id: managerId })
+  }),
+  
+  // Resend password reset email (Admin)
+  resendPasswordReset: (id) => apiRequest(`/employees/${id}/resend-password-reset`, {
+    method: "POST"
   })
 };
 
@@ -106,7 +111,13 @@ export const expenseApi = {
     return apiRequest(`/expenses/my-expenses${query ? `?${query}` : ""}`);
   },
   
-  // Get single expense
+  // Get team expenses (Manager)
+  getTeamExpenses: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return apiRequest(`/expenses/team${query ? `?${query}` : ""}`);
+  },
+  
+  // Get single expense with approval chain
   getById: (id) => apiRequest(`/expenses/${id}`),
   
   // Update expense
@@ -122,6 +133,12 @@ export const expenseApi = {
   
   // Get stats
   getStats: () => apiRequest("/expenses/stats"),
+  
+  // Get categories
+  getCategories: () => apiRequest("/expenses/categories"),
+  
+  // Get available currencies
+  getCurrencies: () => apiRequest("/expenses/currencies"),
   
   // Get currency conversion
   getConversion: (from, to, amount) => 
@@ -154,8 +171,11 @@ export const ocrApi = {
 // ===================
 
 export const approvalApi = {
-  // Get pending approvals for manager/admin
+  // Get pending approvals for manager/admin (sequential)
   getPendingApprovals: () => apiRequest("/approvals/pending"),
+  
+  // Get special approver queue (parallel approvers)
+  getSpecialApproverQueue: () => apiRequest("/approvals/special"),
   
   // Get approval history
   getApprovalHistory: () => apiRequest("/approvals/history"),
@@ -170,4 +190,118 @@ export const approvalApi = {
       comments
     })
   })
+};
+
+// ===================
+// COMPANY API
+// ===================
+
+export const companyApi = {
+  // Get available currencies (public)
+  getCurrencies: () => fetch(`${API_BASE_URL}/companies/currencies`).then(r => r.json()),
+  
+  // Get my company
+  getMyCompany: () => apiRequest("/companies/me"),
+  
+  // Update company settings
+  update: (data) => apiRequest("/companies/me", {
+    method: "PUT",
+    body: JSON.stringify(data)
+  }),
+  
+  // Setup company on signup
+  setup: (organizationName, currency) => apiRequest("/companies/setup", {
+    method: "POST",
+    body: JSON.stringify({ organizationName, currency })
+  })
+};
+
+// ===================
+// NOTIFICATION API
+// ===================
+
+export const notificationApi = {
+  // Get my notifications
+  getAll: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return apiRequest(`/notifications${query ? `?${query}` : ""}`);
+  },
+  
+  // Get unread count
+  getUnreadCount: () => apiRequest("/notifications/unread-count"),
+  
+  // Mark as read
+  markAsRead: (notificationId) => apiRequest(`/notifications/${notificationId}/read`, {
+    method: "PUT"
+  }),
+  
+  // Mark all as read
+  markAllAsRead: () => apiRequest("/notifications/read-all", {
+    method: "PUT"
+  })
+};
+
+// ===================
+// ANALYTICS API
+// ===================
+
+export const analyticsApi = {
+  // Get dashboard summary
+  getDashboard: () => apiRequest("/analytics/dashboard"),
+  
+  // Get spending trends
+  getSpendingTrends: (months = 6) => apiRequest(`/analytics/spending-trends?months=${months}`),
+  
+  // Get bottleneck report
+  getBottlenecks: () => apiRequest("/analytics/bottlenecks"),
+  
+  // Get approval metrics
+  getApprovalMetrics: (days = 30) => apiRequest(`/analytics/approval-metrics?days=${days}`)
+};
+
+// ===================
+// APPROVAL PREVIEW API
+// ===================
+
+export const approvalPreviewApi = {
+  // Get approval preview (shows workflow before submission)
+  getPreview: (amount, category) => {
+    const params = new URLSearchParams();
+    if (amount) params.append("amount", amount);
+    if (category) params.append("category", category);
+    return apiRequest(`/approvals/preview?${params.toString()}`);
+  },
+  
+  // Check if user can submit expenses
+  canSubmit: () => apiRequest("/approvals/can-submit")
+};
+
+// ===================
+// ESCALATION API
+// ===================
+
+export const escalationApi = {
+  // Set manager on leave (Admin only)
+  setManagerLeave: (managerId, startDate, endDate) => apiRequest(
+    `/escalation/manager/${managerId}/set-leave`, 
+    {
+      method: "POST",
+      body: JSON.stringify({ 
+        leave_start_date: startDate, 
+        leave_end_date: endDate 
+      })
+    }
+  ),
+  
+  // Remove manager from leave (Admin only)
+  removeManagerLeave: (managerId) => apiRequest(
+    `/escalation/manager/${managerId}/remove-leave`,
+    { method: "POST" }
+  ),
+  
+  // Get escalation statistics (Admin/Manager)
+  getStats: () => apiRequest("/escalation/stats"),
+  
+  // Get managers currently on leave (Admin only)
+  getManagersOnLeave: () => apiRequest("/escalation/managers-on-leave")
 };

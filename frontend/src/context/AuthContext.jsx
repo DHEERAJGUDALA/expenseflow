@@ -56,7 +56,7 @@ export function AuthProvider({ children }) {
         email: normalizeEmail(email),
         password
       }),
-    signUp: async ({ email, password, fullName, organizationName }) =>
+    signUp: async ({ email, password, fullName, organizationName, country, currencyCode, currencySymbol }) =>
       supabase.auth.signUp({
         email: normalizeEmail(email),
         password,
@@ -65,7 +65,10 @@ export function AuthProvider({ children }) {
           data: {
             role: "admin",
             full_name: fullName.trim(),
-            organization_name: organizationName.trim()
+            organization_name: organizationName.trim(),
+            country: country || "India",
+            currency_code: currencyCode || "INR",
+            currency_symbol: currencySymbol || "₹"
           }
         }
       }),

@@ -7,6 +7,12 @@ import approvalRoutes from "./routes/approvalRoutes.js";
 import employeeRoutes from "./routes/employeeRoutes.js";
 import ocrRoutes from "./routes/ocrRoutes.js";
 import workflowRoutes from "./routes/workflowRoutes.js";
+import adminRoutes from "./routes/adminRoutes.js";
+import companyRoutes from "./routes/companyRoutes.js";
+import paymentCycleRoutes from "./routes/paymentCycleRoutes.js";
+import analyticsRoutes from "./routes/analyticsRoutes.js";
+import notificationRoutes from "./routes/notificationRoutes.js";
+import escalationRoutes from "./routes/escalationRoutes.js";
 
 const app = express();
 
@@ -26,6 +32,12 @@ app.use("/api/approvals", approvalRoutes);
 app.use("/api/employees", employeeRoutes);
 app.use("/api/ocr", ocrRoutes);
 app.use("/api/workflows", workflowRoutes);
+app.use("/api/admin", adminRoutes);
+app.use("/api/companies", companyRoutes);
+app.use("/api/payment-cycles", paymentCycleRoutes);
+app.use("/api/analytics", analyticsRoutes);
+app.use("/api/notifications", notificationRoutes);
+app.use("/api/escalation", escalationRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

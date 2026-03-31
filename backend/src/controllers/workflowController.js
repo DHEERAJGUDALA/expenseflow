@@ -1,163 +1,398 @@
 import { supabase } from "../config/supabaseClient.js";
 import { 
-  getActiveWorkflow, 
-  processApprovalAction,
-  evaluateExpenseStatus 
+  getApplicableRule,
+  getApprovalStatus,
+  processApprovalAction
 } from "../services/approvalWorkflowEngine.js";
 
 /**
- * Get all workflows (Admin only)
+ * Workflow Controller - REWRITTEN FOR NEW SCHEMA
+ * Manages approval_rules, approval_rule_steps, approval_rule_parallel_approvers
  */
-export const getAllWorkflows = async (req, res) => {
+
+/**
+ * Get all approval rules for a company (Admin only)
+ */
+export const getAllRules = async (req, res) => {
   try {
-    const { data: workflows, error } = await supabase
-      .from("approval_workflows")
+    const userId = req.user.id;
+
+    // Get user's company
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("company_id, role")
+      .eq("id", userId)
+      .single();
+
+    if (!profile?.company_id) {
+      return res.status(400).json({ error: "User has no company assigned" });
+    }
+
+    const { data: rules, error } = await supabase
+      .from("approval_rules")
       .select(`
         *,
-        employee:employee_id(id, email, role),
-        special_approver:special_approver_id(id, email, role),
-        steps:approval_steps(
+        sequential_steps:approval_rule_steps(
           id,
           approver_id,
           step_order,
           is_required,
-          approver:approver_id(id, email, role)
-        )
+          approver:approver_id(id, email, role, job_title)
+        ),
+        parallel_approvers:approval_rule_parallel_approvers(
+          id,
+          approver_id,
+          approver:approver_id(id, email, role, job_title)
+        ),
+        specific_approver:specific_approver_id(id, email, role, job_title)
       `)
+      .eq("company_id", profile.company_id)
       .order("created_at", { ascending: false });
 
     if (error) throw error;
 
-    res.json({ workflows });
+    res.json({ rules });
   } catch (err) {
+    console.error("Error fetching rules:", err);
     res.status(500).json({ error: err.message });
   }
 };
 
 /**
- * Get workflow for specific employee
+ * Get a specific approval rule
  */
-export const getWorkflowForEmployee = async (req, res) => {
+export const getRule = async (req, res) => {
   try {
-    const { employeeId } = req.params;
+    const { ruleId } = req.params;
 
-    const workflow = await getActiveWorkflow(employeeId);
+    const { data: rule, error } = await supabase
+      .from("approval_rules")
+      .select(`
+        *,
+        sequential_steps:approval_rule_steps(
+          id,
+          approver_id,
+          step_order,
+          is_required,
+          approver:approver_id(id, email, role, job_title)
+        ),
+        parallel_approvers:approval_rule_parallel_approvers(
+          id,
+          approver_id,
+          approver:approver_id(id, email, role, job_title)
+        )
+      `)
+      .eq("id", ruleId)
+      .single();
 
-    if (!workflow) {
-      return res.json({ workflow: null, message: "No workflow configured" });
-    }
+    if (error) throw error;
 
-    res.json({ workflow });
+    res.json({ rule });
   } catch (err) {
+    console.error("Error fetching rule:", err);
     res.status(500).json({ error: err.message });
   }
 };
 
 /**
- * Create or update approval workflow (Admin only)
+ * Create approval rule (Admin only)
  */
-export const createWorkflow = async (req, res) => {
+export const createRule = async (req, res) => {
   try {
+    const userId = req.user.id;
     const {
-      employee_id,
-      workflow_name,
-      approval_type,
-      approval_threshold,
-      has_special_approver,
-      special_approver_id,
-      approvers // Array of { approver_id, step_order, is_required }
+      name,
+      category,
+      threshold_amount,
+      is_manager_approver,
+      min_approval_percentage,
+      specific_approver_id,
+      sequential_approvers,  // Array of { approver_id, step_order, is_required }
+      parallel_approvers,    // Array of { approver_id }
+      is_default
     } = req.body;
 
     // Validate
-    if (!employee_id || !workflow_name || !approval_type) {
-      return res.status(400).json({ 
-        error: "employee_id, workflow_name, and approval_type are required" 
-      });
+    if (!name) {
+      return res.status(400).json({ error: "Rule name is required" });
     }
 
-    if (!['sequential', 'parallel', 'percentage'].includes(approval_type)) {
-      return res.status(400).json({ 
-        error: "approval_type must be sequential, parallel, or percentage" 
-      });
+    // Get user's company
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("company_id, role")
+      .eq("id", userId)
+      .single();
+
+    if (!profile?.company_id) {
+      return res.status(400).json({ error: "User has no company assigned" });
     }
 
-    if (approval_type === 'percentage' && (!approval_threshold || approval_threshold < 1 || approval_threshold > 100)) {
-      return res.status(400).json({ 
-        error: "approval_threshold must be between 1 and 100 for percentage-based workflows" 
-      });
+    if (profile.role !== 'admin') {
+      return res.status(403).json({ error: "Only admins can create approval rules" });
     }
 
-    if (!approvers || !Array.isArray(approvers) || approvers.length === 0) {
-      return res.status(400).json({ 
-        error: "At least one approver is required" 
-      });
+    // If this is set as default, unset other defaults
+    if (is_default) {
+      await supabase
+        .from("approval_rules")
+        .update({ is_default: false })
+        .eq("company_id", profile.company_id);
     }
 
-    // Deactivate existing workflows for this employee
-    await supabase
-      .from("approval_workflows")
-      .update({ is_active: false })
-      .eq("employee_id", employee_id);
-
-    // Create new workflow
-    const { data: workflow, error: workflowError } = await supabase
-      .from("approval_workflows")
+    // Create approval rule
+    const { data: rule, error: ruleError } = await supabase
+      .from("approval_rules")
       .insert({
-        employee_id,
-        workflow_name,
-        approval_type,
-        approval_threshold,
-        has_special_approver: has_special_approver || false,
-        special_approver_id: special_approver_id || null,
-        is_active: true
+        company_id: profile.company_id,
+        name,
+        category: category || null,
+        threshold_amount: threshold_amount || null,
+        is_manager_approver: is_manager_approver || false,
+        min_approval_percentage: min_approval_percentage || null,
+        specific_approver_id: specific_approver_id || null,
+        is_default: is_default || false
       })
       .select()
       .single();
 
-    if (workflowError) throw workflowError;
+    if (ruleError) throw ruleError;
 
-    // Create approval steps
-    const steps = approvers.map(a => ({
-      workflow_id: workflow.id,
-      approver_id: a.approver_id,
-      step_order: a.step_order || 1,
-      is_required: a.is_required !== undefined ? a.is_required : true
-    }));
+    // Add sequential approvers
+    if (sequential_approvers && Array.isArray(sequential_approvers) && sequential_approvers.length > 0) {
+      const steps = sequential_approvers.map(a => ({
+        rule_id: rule.id,
+        approver_id: a.approver_id,
+        step_order: a.step_order || 1,
+        is_required: a.is_required !== undefined ? a.is_required : true
+      }));
 
-    const { error: stepsError } = await supabase
-      .from("approval_steps")
-      .insert(steps);
+      const { error: stepsError } = await supabase
+        .from("approval_rule_steps")
+        .insert(steps);
 
-    if (stepsError) throw stepsError;
+      if (stepsError) throw stepsError;
+    }
 
-    // Fetch complete workflow
-    const completeWorkflow = await getActiveWorkflow(employee_id);
+    // Add parallel approvers (special approvers like CFO/CEO)
+    if (parallel_approvers && Array.isArray(parallel_approvers) && parallel_approvers.length > 0) {
+      const parallelSteps = parallel_approvers.map(a => ({
+        rule_id: rule.id,
+        approver_id: a.approver_id
+      }));
+
+      const { error: parallelError } = await supabase
+        .from("approval_rule_parallel_approvers")
+        .insert(parallelSteps);
+
+      if (parallelError) throw parallelError;
+    }
+
+    // Fetch complete rule
+    const { data: completeRule } = await supabase
+      .from("approval_rules")
+      .select(`
+        *,
+        sequential_steps:approval_rule_steps(
+          id,
+          approver_id,
+          step_order,
+          is_required,
+          approver:approver_id(id, email, role, job_title)
+        ),
+        parallel_approvers:approval_rule_parallel_approvers(
+          id,
+          approver_id,
+          approver:approver_id(id, email, role, job_title)
+        )
+      `)
+      .eq("id", rule.id)
+      .single();
 
     res.status(201).json({ 
-      workflow: completeWorkflow,
-      message: "Workflow created successfully" 
+      rule: completeRule,
+      message: "Approval rule created successfully" 
     });
   } catch (err) {
+    console.error("Error creating rule:", err);
     res.status(500).json({ error: err.message });
   }
 };
 
 /**
- * Delete workflow (Admin only)
+ * Update approval rule (Admin only)
  */
-export const deleteWorkflow = async (req, res) => {
+export const updateRule = async (req, res) => {
   try {
-    const { id } = req.params;
+    const { ruleId } = req.params;
+    const userId = req.user.id;
+    const {
+      name,
+      category,
+      threshold_amount,
+      is_manager_approver,
+      min_approval_percentage,
+      specific_approver_id,
+      sequential_approvers,
+      parallel_approvers,
+      is_default
+    } = req.body;
 
+    // Verify user is admin
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("company_id, role")
+      .eq("id", userId)
+      .single();
+
+    if (profile.role !== 'admin') {
+      return res.status(403).json({ error: "Only admins can update approval rules" });
+    }
+
+    // If setting as default, unset others
+    if (is_default) {
+      await supabase
+        .from("approval_rules")
+        .update({ is_default: false })
+        .eq("company_id", profile.company_id)
+        .neq("id", ruleId);
+    }
+
+    // Update rule
+    const updateData = {};
+    if (name !== undefined) updateData.name = name;
+    if (category !== undefined) updateData.category = category;
+    if (threshold_amount !== undefined) updateData.threshold_amount = threshold_amount;
+    if (is_manager_approver !== undefined) updateData.is_manager_approver = is_manager_approver;
+    if (min_approval_percentage !== undefined) updateData.min_approval_percentage = min_approval_percentage;
+    if (specific_approver_id !== undefined) updateData.specific_approver_id = specific_approver_id;
+    if (is_default !== undefined) updateData.is_default = is_default;
+    updateData.updated_at = new Date().toISOString();
+
+    const { error: updateError } = await supabase
+      .from("approval_rules")
+      .update(updateData)
+      .eq("id", ruleId);
+
+    if (updateError) throw updateError;
+
+    // Update sequential approvers if provided
+    if (sequential_approvers !== undefined) {
+      // Delete existing steps
+      await supabase
+        .from("approval_rule_steps")
+        .delete()
+        .eq("rule_id", ruleId);
+
+      // Insert new steps
+      if (Array.isArray(sequential_approvers) && sequential_approvers.length > 0) {
+        const steps = sequential_approvers.map(a => ({
+          rule_id: ruleId,
+          approver_id: a.approver_id,
+          step_order: a.step_order || 1,
+          is_required: a.is_required !== undefined ? a.is_required : true
+        }));
+
+        await supabase
+          .from("approval_rule_steps")
+          .insert(steps);
+      }
+    }
+
+    // Update parallel approvers if provided
+    if (parallel_approvers !== undefined) {
+      // Delete existing parallel approvers
+      await supabase
+        .from("approval_rule_parallel_approvers")
+        .delete()
+        .eq("rule_id", ruleId);
+
+      // Insert new parallel approvers
+      if (Array.isArray(parallel_approvers) && parallel_approvers.length > 0) {
+        const parallelSteps = parallel_approvers.map(a => ({
+          rule_id: ruleId,
+          approver_id: a.approver_id
+        }));
+
+        await supabase
+          .from("approval_rule_parallel_approvers")
+          .insert(parallelSteps);
+      }
+    }
+
+    // Fetch updated rule
+    const { data: updatedRule } = await supabase
+      .from("approval_rules")
+      .select(`
+        *,
+        sequential_steps:approval_rule_steps(
+          id,
+          approver_id,
+          step_order,
+          is_required,
+          approver:approver_id(id, email, role, job_title)
+        ),
+        parallel_approvers:approval_rule_parallel_approvers(
+          id,
+          approver_id,
+          approver:approver_id(id, email, role, job_title)
+        )
+      `)
+      .eq("id", ruleId)
+      .single();
+
+    res.json({ 
+      rule: updatedRule,
+      message: "Approval rule updated successfully" 
+    });
+  } catch (err) {
+    console.error("Error updating rule:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * Delete approval rule (Admin only)
+ */
+export const deleteRule = async (req, res) => {
+  try {
+    const { ruleId } = req.params;
+    const userId = req.user.id;
+
+    // Verify user is admin
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", userId)
+      .single();
+
+    if (profile.role !== 'admin') {
+      return res.status(403).json({ error: "Only admins can delete approval rules" });
+    }
+
+    // Check if rule is in use
+    const { count } = await supabase
+      .from("approval_logs")
+      .select("*", { count: 'exact', head: true })
+      .eq("rule_id", ruleId);
+
+    if (count > 0) {
+      return res.status(400).json({ 
+        error: "Cannot delete rule that has been used in approvals. Consider deactivating it instead." 
+      });
+    }
+
+    // Delete rule (CASCADE will delete steps and parallel approvers)
     const { error } = await supabase
-      .from("approval_workflows")
+      .from("approval_rules")
       .delete()
-      .eq("id", id);
+      .eq("id", ruleId);
 
     if (error) throw error;
 
-    res.json({ message: "Workflow deleted successfully" });
+    res.json({ message: "Approval rule deleted successfully" });
   } catch (err) {
+    console.error("Error deleting rule:", err);
     res.status(500).json({ error: err.message });
   }
 };
@@ -169,59 +404,32 @@ export const getExpenseApprovalStatus = async (req, res) => {
   try {
     const { expenseId } = req.params;
 
-    // Get expense with logs
+    // Get expense details
     const { data: expense, error: expError } = await supabase
       .from("expenses")
       .select(`
         id,
+        description,
+        amount,
+        category,
         status,
-        workflow_id,
-        workflow:workflow_id(
-          id,
-          workflow_name,
-          approval_type,
-          approval_threshold,
-          has_special_approver,
-          special_approver:special_approver_id(id, email, role),
-          steps:approval_steps(
-            id,
-            step_order,
-            is_required,
-            approver:approver_id(id, email, role)
-          )
-        )
+        current_step,
+        employee:employee_id(id, email, company_id)
       `)
       .eq("id", expenseId)
       .single();
 
     if (expError) throw expError;
 
-    // Get approval logs
-    const { data: logs, error: logsError } = await supabase
-      .from("expense_approval_logs")
-      .select(`
-        id,
-        action,
-        comments,
-        step_order,
-        is_special_override,
-        created_at,
-        approver:approver_id(id, email, role)
-      `)
-      .eq("expense_id", expenseId)
-      .order("created_at", { ascending: true });
-
-    if (logsError) throw logsError;
-
-    // Evaluate current status
-    const evaluation = await evaluateExpenseStatus(expenseId);
+    // Get approval status
+    const status = await getApprovalStatus(expenseId);
 
     res.json({
       expense,
-      logs,
-      evaluation
+      approvalStatus: status
     });
   } catch (err) {
+    console.error("Error fetching approval status:", err);
     res.status(500).json({ error: err.message });
   }
 };
@@ -232,51 +440,130 @@ export const getExpenseApprovalStatus = async (req, res) => {
 export const processApproval = async (req, res) => {
   try {
     const { expenseId } = req.params;
-    const { action, comments } = req.body;
+    const { action, comment } = req.body;
     const approverId = req.user.id;
 
-    if (!['approved', 'rejected'].includes(action)) {
-      return res.status(400).json({ error: "action must be 'approved' or 'rejected'" });
+    if (!action || !['APPROVED', 'REJECTED'].includes(action.toUpperCase())) {
+      return res.status(400).json({ error: "action must be 'APPROVED' or 'REJECTED'" });
     }
-
-    // Check if user is special approver
-    const { data: expense } = await supabase
-      .from("expenses")
-      .select(`
-        workflow:workflow_id(
-          special_approver_id,
-          has_special_approver
-        )
-      `)
-      .eq("id", expenseId)
-      .single();
-
-    const isSpecialOverride = 
-      expense?.workflow?.has_special_approver && 
-      expense?.workflow?.special_approver_id === approverId;
 
     const result = await processApprovalAction(
       expenseId,
       approverId,
-      action,
-      comments,
-      isSpecialOverride
+      action.toUpperCase(),
+      comment
     );
 
     res.json({
-      message: `Expense ${action} successfully`,
+      message: `Expense ${action.toLowerCase()} successfully`,
       ...result
     });
   } catch (err) {
+    console.error("Error processing approval:", err);
     res.status(400).json({ error: err.message });
   }
 };
 
+/**
+ * Get pending approvals for current user
+ */
+export const getMyPendingApprovals = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Get all expenses where user is a pending approver
+    const { data: pendingLogs, error: logsError } = await supabase
+      .from("approval_logs")
+      .select(`
+        expense_id,
+        step_order,
+        type,
+        is_required,
+        expense:expense_id(
+          id,
+          description,
+          amount,
+          currency,
+          category,
+          expense_date,
+          status,
+          current_step,
+          employee:employee_id(id, email)
+        )
+      `)
+      .eq("approver_id", userId)
+      .eq("action", "PENDING")
+      .order("created_at", { ascending: false });
+
+    if (logsError) throw logsError;
+
+    const expenses = pendingLogs
+      .map(log => log.expense)
+      .filter(exp => exp && exp.status === 'pending');
+
+    res.json({ 
+      count: expenses.length,
+      expenses 
+    });
+  } catch (err) {
+    console.error("Error fetching pending approvals:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * Get approval history for current user
+ */
+export const getMyApprovalHistory = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const { data: logs, error: logsError } = await supabase
+      .from("approval_logs")
+      .select(`
+        id,
+        action,
+        comment,
+        step_order,
+        type,
+        created_at,
+        updated_at,
+        expense:expense_id(
+          id,
+          description,
+          amount,
+          currency,
+          category,
+          expense_date,
+          status,
+          employee:employee_id(id, email)
+        )
+      `)
+      .eq("approver_id", userId)
+      .in("action", ["APPROVED", "REJECTED"])
+      .order("updated_at", { ascending: false })
+      .limit(50);
+
+    if (logsError) throw logsError;
+
+    res.json({ 
+      count: logs.length,
+      history: logs 
+    });
+  } catch (err) {
+    console.error("Error fetching approval history:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
 export default {
-  getAllWorkflows,
-  getWorkflowForEmployee,
-  createWorkflow,
-  deleteWorkflow,
+  getAllRules,
+  getRule,
+  createRule,
+  updateRule,
+  deleteRule,
   getExpenseApprovalStatus,
-  processApproval
+  processApproval,
+  getMyPendingApprovals,
+  getMyApprovalHistory
 };
