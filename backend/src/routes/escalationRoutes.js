@@ -103,7 +103,11 @@ router.post("/manager/:managerId/remove-leave", authenticateUser, async (req, re
  */
 router.get("/stats", authenticateUser, async (req, res) => {
   try {
-    const companyId = req.user.company_id;
+    const companyId = req.user.profile?.company_id;
+
+    if (!companyId) {
+      return res.status(403).json({ error: "Company context required" });
+    }
 
     // Verify permission
     const { data: profile, error: profileError } = await supabase
@@ -137,7 +141,11 @@ router.get("/stats", authenticateUser, async (req, res) => {
  */
 router.get("/managers-on-leave", authenticateUser, async (req, res) => {
   try {
-    const companyId = req.user.company_id;
+    const companyId = req.user.profile?.company_id;
+
+    if (!companyId) {
+      return res.status(403).json({ error: "Company context required" });
+    }
 
     // Verify admin permission
     const { data: profile, error: profileError } = await supabase
