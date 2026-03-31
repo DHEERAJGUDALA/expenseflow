@@ -1,38 +1,33 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
+import { motion } from "framer-motion";
 import { DashboardLayout } from "../components/DashboardLayout";
 import { expenseApi } from "../lib/api";
-
-const STATUS_COLORS = {
-  pending: "bg-yellow-100 text-yellow-700 border-yellow-300",
-  approved: "bg-green-100 text-green-700 border-green-300",
-  rejected: "bg-red-100 text-red-700 border-red-300",
-  paid: "bg-blue-100 text-blue-700 border-blue-300",
-  locked: "bg-slate-100 text-slate-500 border-slate-300",
-  skipped: "bg-slate-100 text-slate-400 border-slate-200"
-};
+import {
+  ArrowLeft, Clock, CheckCircle, XCircle, DollarSign, Calendar,
+  CreditCard, FileText, Check, X, ShieldAlert, Star, Paperclip, Loader2
+} from "lucide-react";
 
 const STATUS_ICONS = {
-  pending: "⏳",
-  approved: "✅",
-  rejected: "❌",
-  paid: "💰",
-  locked: "🔒",
-  skipped: "⏭️"
+  pending: { icon: Clock, color: "var(--warning)", bg: "var(--warning-subtle)", badge: "badge-warning" },
+  approved: { icon: CheckCircle, color: "var(--success)", bg: "var(--success-subtle)", badge: "badge-success" },
+  rejected: { icon: XCircle, color: "var(--danger)", bg: "var(--danger-subtle)", badge: "badge-danger" },
+  paid: { icon: DollarSign, color: "var(--accent)", bg: "var(--accent-subtle)", badge: "badge-accent" },
+  locked: { icon: ShieldAlert, color: "var(--text-muted)", bg: "var(--bg-elevated)", badge: "badge-neutral" },
+  skipped: { icon: ArrowLeft, color: "var(--text-muted)", bg: "var(--bg-elevated)", badge: "badge-neutral" }
 };
 
 const CATEGORY_ICONS = {
-  meals: "🍽️",
-  travel: "✈️",
-  accommodation: "🏨",
-  transport: "🚗",
-  office_supplies: "📎",
-  entertainment: "🎬",
-  communication: "📱",
-  software: "💻",
-  equipment: "🖥️",
-  other: "📦"
+  meals: "🍽️", travel: "✈️", accommodation: "🏨", transport: "🚗",
+  office_supplies: "📎", entertainment: "🎬", communication: "📱",
+  software: "💻", equipment: "🖥️", other: "📦"
 };
+
+const fadeIn = (delay = 0) => ({
+  initial: { opacity: 0, y: 12 },
+  animate: { opacity: 1, y: 0 },
+  transition: { duration: 0.35, delay, ease: "easeOut" }
+});
 
 export function ExpenseDetailPage() {
   const { id } = useParams();
@@ -42,57 +37,33 @@ export function ExpenseDetailPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  useEffect(() => {
-    loadExpense();
-  }, [id]);
+  useEffect(() => { loadExpense(); }, [id]);
 
   const loadExpense = async () => {
-    setIsLoading(true);
-    setError(null);
+    setIsLoading(true); setError(null);
     try {
       const data = await expenseApi.getById(id);
       setExpense(data.expense);
       setApprovalChain(data.approval_chain);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setIsLoading(false);
-    }
+    } catch (err) { setError(err.message); }
+    finally { setIsLoading(false); }
   };
 
   const formatCurrency = (amount, currency = "INR") => {
-    return new Intl.NumberFormat("en-IN", {
-      style: "currency",
-      currency: currency
-    }).format(amount);
+    try { return new Intl.NumberFormat("en-IN", { style: "currency", currency }).format(amount); }
+    catch { return `${currency} ${amount}`; }
   };
 
-  const formatDate = (dateStr) => {
-    return new Date(dateStr).toLocaleDateString("en-IN", {
-      month: "short",
-      day: "numeric",
-      year: "numeric"
-    });
-  };
-
-  const formatDateTime = (dateStr) => {
-    if (!dateStr) return null;
-    return new Date(dateStr).toLocaleString("en-IN", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit"
-    });
-  };
+  const formatDate = (dateStr) => new Date(dateStr).toLocaleDateString("en-IN", { month: "short", day: "numeric", year: "numeric" });
+  const formatDateTime = (dateStr) => new Date(dateStr).toLocaleString("en-IN", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" });
 
   if (isLoading) {
     return (
       <DashboardLayout>
-        <div className="p-6 flex items-center justify-center min-h-[400px]">
-          <div className="text-center text-slate-500">
-            <span className="animate-spin inline-block text-4xl mb-4">⏳</span>
-            <p>Loading expense details...</p>
+        <div className="flex items-center justify-center min-h-[400px]">
+          <div className="text-center">
+            <Loader2 size={32} className="animate-spin mx-auto mb-4" style={{ color: "var(--accent)" }} />
+            <p className="text-sm font-medium" style={{ color: "var(--text-muted)" }}>Loading expense details...</p>
           </div>
         </div>
       </DashboardLayout>
@@ -103,255 +74,205 @@ export function ExpenseDetailPage() {
     return (
       <DashboardLayout>
         <div className="p-6">
-          <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-4">
-            {error || "Expense not found"}
-          </div>
-          <Link to="/app/expenses" className="text-indigo-600 hover:text-indigo-700 mt-4 inline-block">
-            ← Back to expenses
-          </Link>
+          <div className="alert alert-danger">{error || "Expense not found"}</div>
+          <button onClick={() => navigate(-1)} className="btn btn-secondary mt-4"><ArrowLeft size={16} /> Back</button>
         </div>
       </DashboardLayout>
     );
   }
 
+  const statusInfo = STATUS_ICONS[expense.status] || STATUS_ICONS.pending;
+  const StatusIcon = statusInfo.icon;
+
   return (
     <DashboardLayout>
-      <div className="p-6 max-w-4xl mx-auto">
+      <div className="p-6 lg:p-8 max-w-5xl mx-auto">
         {/* Header */}
-        <div className="flex items-center gap-4 mb-6">
-          <button
-            onClick={() => navigate(-1)}
-            className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
-          >
-            ←
+        <motion.div {...fadeIn(0)} className="flex items-center gap-4 mb-6">
+          <button onClick={() => navigate(-1)} className="w-10 h-10 rounded-lg flex items-center justify-center transition-colors"
+            style={{ background: "var(--bg-elevated)", color: "var(--text-secondary)" }}
+            onMouseOver={(e) => { e.currentTarget.style.background = "var(--border-subtle)"; e.currentTarget.style.color = "var(--text-primary)"; }}
+            onMouseOut={(e) => { e.currentTarget.style.background = "var(--bg-elevated)"; e.currentTarget.style.color = "var(--text-secondary)"; }}>
+            <ArrowLeft size={18} />
           </button>
           <div className="flex-1">
-            <h1 className="text-2xl font-bold text-slate-900">Expense Details</h1>
-            <p className="text-slate-600">
-              Submitted on {formatDate(expense.created_at)}
-            </p>
+            <h1 className="page-title mb-0.5">Expense Details</h1>
+            <p className="page-subtitle text-xs">Submitted on {formatDate(expense.created_at)}</p>
           </div>
-          <span className={`px-4 py-2 rounded-full text-sm font-medium border ${STATUS_COLORS[expense.status]}`}>
-            {STATUS_ICONS[expense.status]} {expense.status?.charAt(0).toUpperCase() + expense.status?.slice(1)}
+          <span className={`badge ${statusInfo.badge} flex items-center gap-1.5 px-3 py-1.5 text-sm`}>
+            <StatusIcon size={14} /> {expense.status?.charAt(0).toUpperCase() + expense.status?.slice(1)}
           </span>
-        </div>
+        </motion.div>
 
-        {/* Expense Info Card */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mb-6">
-          <div className="flex items-start gap-4">
-            <div className="w-16 h-16 bg-slate-100 rounded-xl flex items-center justify-center text-3xl">
-              {CATEGORY_ICONS[expense.category] || "📦"}
-            </div>
-            <div className="flex-1">
-              <h2 className="text-xl font-semibold text-slate-900">
-                {expense.description || "Expense"}
-              </h2>
-              <p className="text-slate-500 capitalize">
-                {expense.category?.replace(/_/g, " ")} • {formatDate(expense.expense_date)}
-              </p>
-            </div>
-            <div className="text-right">
-              <p className="text-2xl font-bold text-slate-900">
-                {formatCurrency(expense.amount, expense.currency)}
-              </p>
-              {expense.converted_amount && expense.currency !== expense.company_currency && (
-                <p className="text-sm text-slate-500">
-                  ≈ {formatCurrency(expense.converted_amount, expense.company_currency)}
-                </p>
-              )}
-            </div>
-          </div>
+        <div className="grid grid-cols-1 lg:grid-cols-[1.5fr_1fr] gap-6">
+          <div className="space-y-6">
+            {/* Overview Card */}
+            <motion.div {...fadeIn(0.1)} className="card p-6 md:p-8">
+              <div className="flex items-start gap-5">
+                <div className="w-16 h-16 rounded-2xl flex items-center justify-center text-3xl shadow-sm flex-shrink-0" style={{ background: "var(--bg-elevated)" }}>
+                  {CATEGORY_ICONS[expense.category] || "📦"}
+                </div>
+                <div className="flex-1 min-w-0 pt-1">
+                  <h2 className="text-xl font-bold truncate" style={{ color: "var(--text-primary)", fontFamily: "var(--font-heading)" }}>
+                    {expense.description || "Expense"}
+                  </h2>
+                  <p className="text-sm capitalize mt-1" style={{ color: "var(--text-muted)" }}>
+                    {expense.category?.replace(/_/g, " ")}
+                  </p>
+                </div>
+                <div className="text-right pt-1 flex-shrink-0">
+                  <p className="text-2xl font-bold" style={{ color: "var(--text-primary)", fontFamily: "var(--font-heading)" }}>
+                    {formatCurrency(expense.amount, expense.currency)}
+                  </p>
+                  {expense.converted_amount && expense.currency !== expense.company_currency && (
+                    <p className="text-xs font-semibold mt-1" style={{ color: "var(--text-muted)" }}>
+                      ≈ {formatCurrency(expense.converted_amount, expense.company_currency)}
+                    </p>
+                  )}
+                </div>
+              </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6 pt-6 border-t border-slate-100">
-            <div>
-              <p className="text-sm text-slate-500">Merchant/Vendor</p>
-              <p className="font-medium">{expense.paid_by || "Not specified"}</p>
-            </div>
-            <div>
-              <p className="text-sm text-slate-500">Expense Date</p>
-              <p className="font-medium">{formatDate(expense.expense_date)}</p>
-            </div>
-            <div>
-              <p className="text-sm text-slate-500">Currency</p>
-              <p className="font-medium">{expense.currency}</p>
-            </div>
-            <div>
-              <p className="text-sm text-slate-500">Status</p>
-              <p className="font-medium capitalize">{expense.status}</p>
-            </div>
-          </div>
-
-          {expense.remarks && (
-            <div className="mt-4 pt-4 border-t border-slate-100">
-              <p className="text-sm text-slate-500 mb-1">Remarks</p>
-              <p className="text-slate-700">{expense.remarks}</p>
-            </div>
-          )}
-
-          {/* Payment Info (if paid) */}
-          {expense.status === 'paid' && expense.payment_cycle && (
-            <div className="mt-4 pt-4 border-t border-slate-100 bg-blue-50 -mx-6 -mb-6 px-6 py-4 rounded-b-xl">
-              <div className="flex items-center gap-2 text-blue-700">
-                <span className="text-xl">💰</span>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-8 pt-6" style={{ borderTop: "1px solid var(--border-subtle)" }}>
                 <div>
-                  <p className="font-medium">Paid</p>
-                  <p className="text-sm">
-                    Payment processed on {formatDate(expense.payment_cycle.process_date)}
+                  <p className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "var(--text-muted)" }}>Merchant</p>
+                  <p className="font-medium text-sm" style={{ color: "var(--text-primary)" }}>{expense.paid_by || expense.merchant_name || "N/A"}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "var(--text-muted)" }}>Date</p>
+                  <p className="font-medium text-sm" style={{ color: "var(--text-primary)" }}>{formatDate(expense.expense_date)}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "var(--text-muted)" }}>Currency</p>
+                  <p className="font-medium text-sm" style={{ color: "var(--text-primary)" }}>{expense.currency}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "var(--text-muted)" }}>Submitted</p>
+                  <p className="font-medium text-sm" style={{ color: "var(--text-primary)" }}>{formatDate(expense.created_at)}</p>
+                </div>
+              </div>
+
+              {expense.remarks && (
+                <div className="mt-6 pt-6" style={{ borderTop: "1px solid var(--border-subtle)" }}>
+                  <p className="text-xs font-semibold uppercase tracking-wider mb-2 flex items-center gap-1.5" style={{ color: "var(--text-muted)" }}>
+                    <FileText size={14} /> Remarks
                   </p>
+                  <p className="text-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>{expense.remarks}</p>
                 </div>
-              </div>
-            </div>
-          )}
-        </div>
+              )}
 
-        {/* Approval Chain Tracker */}
-        {approvalChain && (
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-            <h3 className="text-lg font-semibold text-slate-900 mb-4">
-              Approval Progress
-            </h3>
-
-            {/* Progress Bar */}
-            {approvalChain.sequential && approvalChain.sequential.length > 0 && (
-              <div className="mb-6">
-                <div className="flex justify-between text-sm text-slate-500 mb-2">
-                  <span>Step {approvalChain.summary.completed_steps} of {approvalChain.summary.total_steps}</span>
-                  <span>
-                    {Math.round((approvalChain.summary.completed_steps / approvalChain.summary.total_steps) * 100)}% complete
-                  </span>
+              {expense.status === 'paid' && expense.payment_cycle && (
+                <div className="mt-6 alert" style={{ background: "var(--accent-subtle)", color: "var(--accent)", border: "none" }}>
+                  <DollarSign size={18} />
+                  <div>
+                    <p className="font-semibold text-sm">Payment Processed</p>
+                    <p className="text-xs mt-0.5 opacity-80">Paid on {formatDate(expense.payment_cycle.process_date)}</p>
+                  </div>
                 </div>
-                <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                  <div 
-                    className="h-full bg-indigo-600 transition-all duration-500"
-                    style={{ 
-                      width: `${(approvalChain.summary.completed_steps / approvalChain.summary.total_steps) * 100}%` 
-                    }}
-                  ></div>
+              )}
+            </motion.div>
+
+            {/* Receipt Image */}
+            {expense.receipt_url && (
+              <motion.div {...fadeIn(0.15)} className="card p-6 text-center">
+                <h3 className="text-sm font-bold uppercase tracking-wider mb-4 flex items-center gap-2 justify-center" style={{ color: "var(--text-primary)" }}>
+                  <Paperclip size={16} /> Attached Receipt
+                </h3>
+                <div className="bg-slate-50 border rounded-xl overflow-hidden" style={{ borderColor: "var(--border-subtle)" }}>
+                  <img src={expense.receipt_url} alt="Receipt" className="w-full max-h-96 object-contain" />
                 </div>
-              </div>
-            )}
-
-            {/* Sequential Approvers */}
-            {approvalChain.sequential && approvalChain.sequential.length > 0 && (
-              <div className="space-y-4">
-                <h4 className="text-sm font-medium text-slate-700">Approval Chain</h4>
-                <div className="relative">
-                  {/* Vertical line connecting steps */}
-                  <div className="absolute left-6 top-8 bottom-8 w-0.5 bg-slate-200"></div>
-                  
-                  {approvalChain.sequential.map((step, index) => (
-                    <div key={index} className="relative flex items-start gap-4 pb-6 last:pb-0">
-                      {/* Step indicator */}
-                      <div className={`w-12 h-12 rounded-full flex items-center justify-center text-xl z-10 ${
-                        step.status === 'approved' ? 'bg-green-100' :
-                        step.status === 'rejected' ? 'bg-red-100' :
-                        step.status === 'pending' ? 'bg-yellow-100' :
-                        step.status === 'locked' ? 'bg-slate-100' :
-                        'bg-slate-100'
-                      }`}>
-                        {STATUS_ICONS[step.status] || '🔒'}
-                      </div>
-
-                      {/* Step content */}
-                      <div className="flex-1 bg-slate-50 rounded-lg p-4">
-                        <div className="flex justify-between items-start">
-                          <div>
-                            <p className="font-medium text-slate-900">
-                              Step {step.step}: {step.approver.name || step.approver.email?.split('@')[0]}
-                            </p>
-                            <p className="text-sm text-slate-500">
-                              {step.approver.job_title || 'Approver'}
-                              {step.is_required && (
-                                <span className="ml-2 text-xs bg-slate-200 px-2 py-0.5 rounded">Required</span>
-                              )}
-                            </p>
-                          </div>
-                          <span className={`px-2 py-1 rounded text-xs font-medium ${STATUS_COLORS[step.status]}`}>
-                            {step.status?.charAt(0).toUpperCase() + step.status?.slice(1)}
-                          </span>
-                        </div>
-
-                        {/* Show comment and timestamp if decided */}
-                        {step.decided_at && (
-                          <div className="mt-2 pt-2 border-t border-slate-200">
-                            <p className="text-xs text-slate-400">
-                              {formatDateTime(step.decided_at)}
-                            </p>
-                            {step.comment && (
-                              <p className="text-sm text-slate-600 mt-1 italic">
-                                "{step.comment}"
-                              </p>
-                            )}
-                          </div>
-                        )}
-
-                        {/* Show "Waiting" indicator for pending */}
-                        {step.status === 'pending' && (
-                          <div className="mt-2 pt-2 border-t border-slate-200">
-                            <p className="text-sm text-yellow-600 flex items-center gap-1">
-                              <span className="animate-pulse">⏳</span>
-                              Waiting for approval
-                            </p>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Special Approvers */}
-            {approvalChain.parallel && approvalChain.parallel.length > 0 && (
-              <div className="mt-6 pt-6 border-t border-slate-100">
-                <h4 className="text-sm font-medium text-slate-700 mb-4 flex items-center gap-2">
-                  <span>⭐</span> Special Approvers
-                  <span className="text-xs text-slate-400 font-normal">(Can approve/reject at any time)</span>
-                </h4>
-                <div className="grid gap-3">
-                  {approvalChain.parallel.map((approver, index) => (
-                    <div 
-                      key={index}
-                      className="flex items-center gap-3 bg-slate-50 rounded-lg p-3"
-                    >
-                      <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                        approver.status === 'approved' ? 'bg-green-100' :
-                        approver.status === 'rejected' ? 'bg-red-100' :
-                        'bg-yellow-100'
-                      }`}>
-                        {STATUS_ICONS[approver.status] || '⭐'}
-                      </div>
-                      <div className="flex-1">
-                        <p className="font-medium text-slate-900">
-                          {approver.approver.name || approver.approver.email?.split('@')[0]}
-                        </p>
-                        <p className="text-sm text-slate-500">{approver.approver.job_title}</p>
-                      </div>
-                      <span className={`px-2 py-1 rounded text-xs font-medium ${STATUS_COLORS[approver.status]}`}>
-                        {approver.status?.charAt(0).toUpperCase() + approver.status?.slice(1)}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Current Approver Highlight */}
-            {approvalChain.current_approver && expense.status === 'pending' && (
-              <div className="mt-6 pt-6 border-t border-slate-100">
-                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-                  <p className="text-yellow-800 font-medium flex items-center gap-2">
-                    <span>⏳</span>
-                    Currently waiting on: {approvalChain.current_approver.approver.name || approvalChain.current_approver.approver.email?.split('@')[0]}
-                  </p>
-                  <p className="text-yellow-600 text-sm mt-1">
-                    {approvalChain.current_approver.approver.job_title || 'Approver'} (Step {approvalChain.current_approver.step})
-                  </p>
-                </div>
-              </div>
+                <a href={expense.receipt_url} target="_blank" rel="noopener noreferrer" className="btn btn-secondary mt-4 w-full">View Full Size</a>
+              </motion.div>
             )}
           </div>
-        )}
+
+          <div className="space-y-6">
+            {/* Approval Tracking */}
+            {approvalChain && (
+              <motion.div {...fadeIn(0.2)} className="card p-6">
+                <h3 className="text-base font-bold mb-1" style={{ color: "var(--text-primary)", fontFamily: "var(--font-heading)" }}>Approval Progress</h3>
+                {approvalChain.applied_rule_name && (
+                  <p className="text-xs font-semibold mb-5" style={{ color: "var(--text-muted)" }}>Rule: {approvalChain.applied_rule_name}</p>
+                )}
+
+                {approvalChain.steps && approvalChain.steps.length > 0 && (
+                  <div className="mb-8">
+                    <div className="flex justify-between text-xs font-semibold mb-2" style={{ color: "var(--text-muted)" }}>
+                      <span>Step {approvalChain.summary.completed_steps} of {approvalChain.summary.total_steps}</span>
+                      <span>{approvalChain.summary.total_steps > 0 ? Math.round((approvalChain.summary.completed_steps / approvalChain.summary.total_steps) * 100) : 0}%</span>
+                    </div>
+                    <div className="h-2 rounded-full overflow-hidden" style={{ background: "var(--bg-elevated)" }}>
+                      <motion.div
+                        initial={{ width: 0 }}
+                        animate={{ width: `${approvalChain.summary.total_steps > 0 ? (approvalChain.summary.completed_steps / approvalChain.summary.total_steps) * 100 : 0}%` }}
+                        transition={{ duration: 0.8, ease: "easeOut" }}
+                        className="h-full rounded-full"
+                        style={{ background: "var(--accent)" }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Vertical Timeline */}
+                {approvalChain.steps && approvalChain.steps.length > 0 && (
+                  <div className="relative pt-2">
+                    <div className="absolute left-4 top-0 bottom-0 w-px" style={{ background: "var(--border-subtle)" }} />
+                    <div className="space-y-6 relative">
+                      {approvalChain.steps.map((step, idx) => {
+                        const sInfo = STATUS_ICONS[step.status] || STATUS_ICONS.locked;
+                        const SIcon = sInfo.icon;
+                        return (
+                          <div key={idx} className="relative flex gap-4 items-start">
+                            <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 z-10"
+                              style={{ background: step.status === "pending" ? "var(--bg-card)" : sInfo.bg, color: sInfo.color, border: step.status === "pending" ? `2px solid ${sInfo.color}` : "none" }}>
+                              <SIcon size={14} />
+                            </div>
+                            <div className="flex-1 min-w-0 pt-1">
+                              <div className="flex justify-between items-start mb-1">
+                                <div>
+                                  <p className="text-sm font-bold" style={{ color: "var(--text-primary)" }}>{step.approver.name || step.approver.email?.split('@')[0]}</p>
+                                  <p className="text-xs" style={{ color: "var(--text-muted)" }}>{step.approver.job_title || 'Approver'}</p>
+                                </div>
+                                <span className={`badge ${sInfo.badge} text-[10px]`}>{step.status}</span>
+                              </div>
+                              {step.actioned_at && (
+                                <div className="mt-2 p-3 rounded-lg" style={{ background: "var(--bg-elevated)" }}>
+                                  <p className="text-[11px] font-semibold mb-1" style={{ color: "var(--text-muted)" }}>{formatDateTime(step.actioned_at)}</p>
+                                  {step.comment && <p className="text-xs italic" style={{ color: "var(--text-secondary)" }}>"{step.comment}"</p>}
+                                </div>
+                              )}
+                              {step.status === 'pending' && (
+                                <p className="text-xs font-medium mt-2 flex items-center gap-1.5" style={{ color: "var(--warning)" }}>
+                                  <Clock size={12} className="animate-spin-slow" /> Waiting for review
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {approvalChain.special_approver && (
+                  <div className="mt-8 pt-6" style={{ borderTop: "1px solid var(--border-subtle)" }}>
+                    <p className="text-xs font-bold uppercase tracking-wider mb-4 flex items-center gap-1.5" style={{ color: "var(--text-muted)" }}>
+                      <Star size={14} /> Special Approver <span className="text-[10px] font-medium opacity-70">(Can resolve anytime)</span>
+                    </p>
+                    <div className="flex items-center gap-3 p-3 rounded-xl" style={{ border: "1px solid rgba(168,85,247,0.2)", background: "var(--purple-subtle)" }}>
+                      <div className="w-10 h-10 rounded-full flex items-center justify-center text-white flex-shrink-0 shadow-sm" style={{ background: "linear-gradient(135deg, var(--purple), #c084fc)" }}>
+                        <Star size={16} />
+                      </div>
+                      <div>
+                        <p className="text-sm font-bold" style={{ color: "var(--purple)" }}>{approvalChain.special_approver.name || approvalChain.special_approver.email?.split('@')[0]}</p>
+                        <p className="text-xs font-semibold mt-0.5" style={{ color: "var(--purple)", opacity: 0.8 }}>{approvalChain.special_approver.job_title || 'Special Approver'}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </motion.div>
+            )}
+          </div>
+        </div>
       </div>
     </DashboardLayout>
   );
