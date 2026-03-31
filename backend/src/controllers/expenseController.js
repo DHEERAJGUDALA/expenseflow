@@ -62,57 +62,28 @@ export const createExpense = async (req, res) => {
       merchant_name,
       receipt_url,
       ocr_raw_text,
-      line_items // Array of { description, amount, quantity }
+      paid_by,
+      remarks
     } = req.body;
 
     // Validate required fields
-    if (!amount || !category) {
+    if (!amount || !category || !description) {
       return res.status(400).json({ 
-        error: "Amount and category are required" 
+        error: "Amount, category, and description are required" 
       });
     }
 
-    // Get employee and company info
-    const { data: employee, error: empError } = await supabase
-      .from("employees")
-      .select(`
-        id,
-        company_id,
-        company:company_id (currency_code)
-      `)
-      .eq("user_id", userId)
-      .single();
-
-    if (empError || !employee) {
-      return res.status(404).json({ error: "Employee record not found" });
-    }
-
-    const expenseCurrency = currency_code || "USD";
-    const companyCurrency = employee.company?.currency_code || "USD";
-
-    // Convert amount to company currency
-    let convertedAmount = amount;
-    if (expenseCurrency !== companyCurrency) {
-      const rate = await getExchangeRate(expenseCurrency, companyCurrency);
-      convertedAmount = parseFloat((amount * rate).toFixed(2));
-    }
-
-    // Create expense
+    // Create expense using the existing schema
     const { data: expense, error: expError } = await supabase
       .from("expenses")
       .insert({
-        employee_id: employee.id,
-        company_id: employee.company_id,
+        user_id: userId,
         amount: parseFloat(amount),
-        currency_code: expenseCurrency,
-        converted_amount: convertedAmount,
-        company_currency_code: companyCurrency,
         category,
-        description: description || null,
+        description,
         expense_date: expense_date || new Date().toISOString().split("T")[0],
-        merchant_name: merchant_name || null,
-        receipt_url: receipt_url || null,
-        ocr_raw_text: ocr_raw_text || null,
+        paid_by: paid_by || merchant_name || null,
+        remarks: remarks || ocr_raw_text || null,
         status: "pending"
       })
       .select()
@@ -120,32 +91,9 @@ export const createExpense = async (req, res) => {
 
     if (expError) throw expError;
 
-    // Create expense line items if provided
-    if (line_items && line_items.length > 0) {
-      const lineItemsData = line_items.map(item => ({
-        expense_id: expense.id,
-        description: item.description,
-        amount: parseFloat(item.amount),
-        quantity: item.quantity || 1
-      }));
-
-      const { error: lineError } = await supabase
-        .from("expense_lines")
-        .insert(lineItemsData);
-
-      if (lineError) {
-        console.error("Error creating line items:", lineError);
-        // Don't fail the whole request for line items
-      }
-    }
-
     res.status(201).json({
       expense,
-      message: "Expense submitted successfully",
-      conversion: expenseCurrency !== companyCurrency ? {
-        original: { amount, currency: expenseCurrency },
-        converted: { amount: convertedAmount, currency: companyCurrency }
-      } : null
+      message: "Expense submitted successfully"
     });
   } catch (err) {
     console.error("Create expense error:", err);
@@ -161,25 +109,11 @@ export const getMyExpenses = async (req, res) => {
     const userId = req.user.id;
     const { status, limit = 50, offset = 0 } = req.query;
 
-    // Get employee ID
-    const { data: employee, error: empError } = await supabase
-      .from("employees")
-      .select("id")
-      .eq("user_id", userId)
-      .single();
-
-    if (empError || !employee) {
-      return res.status(404).json({ error: "Employee record not found" });
-    }
-
     // Build query
     let query = supabase
       .from("expenses")
-      .select(`
-        *,
-        expense_lines (*)
-      `)
-      .eq("employee_id", employee.id)
+      .select("*")
+      .eq("user_id", userId)
       .order("created_at", { ascending: false })
       .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
 
@@ -198,42 +132,53 @@ export const getMyExpenses = async (req, res) => {
 };
 
 /**
- * Get all expenses (Admin view with filters)
+ * Get all expenses (Admin/Manager view with filters)
  */
 export const getExpenses = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { status, employee_id, limit = 50, offset = 0 } = req.query;
+    const { status, user_id, limit = 50, offset = 0 } = req.query;
 
-    // Get current user's company and role
-    const { data: currentEmployee, error: empError } = await supabase
-      .from("employees")
-      .select("company_id, role")
-      .eq("user_id", userId)
+    // Get current user's role
+    const { data: currentUser, error: userError } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", userId)
       .single();
 
-    if (empError || !currentEmployee) {
-      return res.status(404).json({ error: "Employee record not found" });
-    }
+    if (userError) throw userError;
 
     // Build query
     let query = supabase
       .from("expenses")
       .select(`
         *,
-        employee:employee_id (id, full_name, email, department),
-        expense_lines (*)
+        user:user_id (id, email, role)
       `)
-      .eq("company_id", currentEmployee.company_id)
       .order("created_at", { ascending: false })
       .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
+
+    // If not admin, only show own expenses or team expenses
+    if (currentUser.role === "employee") {
+      query = query.eq("user_id", userId);
+    } else if (currentUser.role === "manager") {
+      // Get team member IDs
+      const { data: teamMembers } = await supabase
+        .from("profiles")
+        .select("id")
+        .eq("manager_id", userId);
+      
+      const teamIds = teamMembers?.map(m => m.id) || [];
+      teamIds.push(userId); // Include own expenses
+      query = query.in("user_id", teamIds);
+    }
 
     if (status) {
       query = query.eq("status", status);
     }
 
-    if (employee_id) {
-      query = query.eq("employee_id", employee_id);
+    if (user_id) {
+      query = query.eq("user_id", user_id);
     }
 
     const { data: expenses, error } = await query;
@@ -257,8 +202,7 @@ export const getExpenseById = async (req, res) => {
       .from("expenses")
       .select(`
         *,
-        employee:employee_id (id, full_name, email, department, manager_id),
-        expense_lines (*)
+        user:user_id (id, email, role, manager_id)
       `)
       .eq("id", id)
       .single();
@@ -276,7 +220,7 @@ export const getExpenseById = async (req, res) => {
 };
 
 /**
- * Update expense (only draft expenses can be edited)
+ * Update expense (only pending expenses can be edited)
  */
 export const updateExpense = async (req, res) => {
   try {
@@ -284,21 +228,17 @@ export const updateExpense = async (req, res) => {
     const userId = req.user.id;
     const {
       amount,
-      currency_code,
       category,
       description,
       expense_date,
-      merchant_name,
-      receipt_url
+      paid_by,
+      remarks
     } = req.body;
 
     // Get expense and verify ownership
     const { data: expense, error: expError } = await supabase
       .from("expenses")
-      .select(`
-        *,
-        employee:employee_id (user_id, company:company_id (currency_code))
-      `)
+      .select("user_id, status")
       .eq("id", id)
       .single();
 
@@ -306,38 +246,24 @@ export const updateExpense = async (req, res) => {
       return res.status(404).json({ error: "Expense not found" });
     }
 
-    if (expense.employee.user_id !== userId) {
+    if (expense.user_id !== userId) {
       return res.status(403).json({ error: "Cannot edit another user's expense" });
     }
 
-    if (expense.status !== "draft" && expense.status !== "pending") {
+    if (expense.status !== "pending") {
       return res.status(400).json({ 
-        error: "Cannot edit expense that is already being processed" 
+        error: "Cannot edit expense that is already processed" 
       });
     }
 
     // Prepare update data
-    const updateData = { updated_at: new Date().toISOString() };
-
-    if (amount !== undefined) {
-      updateData.amount = parseFloat(amount);
-      const expenseCurrency = currency_code || expense.currency_code;
-      const companyCurrency = expense.employee.company?.currency_code || "USD";
-      
-      if (expenseCurrency !== companyCurrency) {
-        const rate = await getExchangeRate(expenseCurrency, companyCurrency);
-        updateData.converted_amount = parseFloat((amount * rate).toFixed(2));
-      } else {
-        updateData.converted_amount = parseFloat(amount);
-      }
-    }
-
-    if (currency_code !== undefined) updateData.currency_code = currency_code;
+    const updateData = {};
+    if (amount !== undefined) updateData.amount = parseFloat(amount);
     if (category !== undefined) updateData.category = category;
     if (description !== undefined) updateData.description = description;
     if (expense_date !== undefined) updateData.expense_date = expense_date;
-    if (merchant_name !== undefined) updateData.merchant_name = merchant_name;
-    if (receipt_url !== undefined) updateData.receipt_url = receipt_url;
+    if (paid_by !== undefined) updateData.paid_by = paid_by;
+    if (remarks !== undefined) updateData.remarks = remarks;
 
     const { data: updated, error } = await supabase
       .from("expenses")
@@ -355,7 +281,7 @@ export const updateExpense = async (req, res) => {
 };
 
 /**
- * Delete expense (only draft expenses)
+ * Delete expense (only pending expenses)
  */
 export const deleteExpense = async (req, res) => {
   try {
@@ -365,7 +291,7 @@ export const deleteExpense = async (req, res) => {
     // Get expense and verify ownership
     const { data: expense, error: expError } = await supabase
       .from("expenses")
-      .select("employee:employee_id (user_id), status")
+      .select("user_id, status")
       .eq("id", id)
       .single();
 
@@ -373,17 +299,16 @@ export const deleteExpense = async (req, res) => {
       return res.status(404).json({ error: "Expense not found" });
     }
 
-    if (expense.employee.user_id !== userId) {
+    if (expense.user_id !== userId) {
       return res.status(403).json({ error: "Cannot delete another user's expense" });
     }
 
-    if (expense.status !== "draft") {
+    if (expense.status !== "pending") {
       return res.status(400).json({ 
-        error: "Can only delete draft expenses" 
+        error: "Can only delete pending expenses" 
       });
     }
 
-    // Delete expense (cascade will handle line items)
     const { error } = await supabase
       .from("expenses")
       .delete()
@@ -404,27 +329,24 @@ export const getExpenseStats = async (req, res) => {
   try {
     const userId = req.user.id;
 
-    // Get employee info
-    const { data: employee, error: empError } = await supabase
-      .from("employees")
-      .select("id, company_id, role")
-      .eq("user_id", userId)
+    // Get user's role
+    const { data: currentUser, error: userError } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", userId)
       .single();
 
-    if (empError || !employee) {
-      return res.status(404).json({ error: "Employee record not found" });
-    }
+    if (userError) throw userError;
 
     // Get expenses based on role
     let query = supabase
       .from("expenses")
-      .select("status, converted_amount, company_currency_code, category");
+      .select("status, amount, category");
 
-    if (employee.role === "employee") {
-      query = query.eq("employee_id", employee.id);
-    } else {
-      query = query.eq("company_id", employee.company_id);
+    if (currentUser.role === "employee") {
+      query = query.eq("user_id", userId);
     }
+    // Admin sees all, manager logic can be added
 
     const { data: expenses, error } = await query;
 
@@ -438,7 +360,7 @@ export const getExpenseStats = async (req, res) => {
       total_amount: 0,
       pending_amount: 0,
       approved_amount: 0,
-      currency: expenses[0]?.company_currency_code || "USD"
+      currency: "INR" // Default currency
     };
 
     for (const exp of expenses) {
@@ -449,7 +371,7 @@ export const getExpenseStats = async (req, res) => {
       stats.by_category[exp.category] = (stats.by_category[exp.category] || 0) + 1;
       
       // Amounts
-      const amount = exp.converted_amount || 0;
+      const amount = parseFloat(exp.amount) || 0;
       stats.total_amount += amount;
       
       if (exp.status === "pending") {
