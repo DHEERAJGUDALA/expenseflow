@@ -2,11 +2,11 @@ import { supabase } from "../config/supabaseClient.js";
 
 export const approveExpense = async (req, res) => {
   try {
-    const { expense_id, approver_id, status } = req.body;
+    const { ticket_id, manager_id, request_owner_id, status } = req.body;
 
     const { data, error } = await supabase
-      .from("approvals")
-      .insert([{ expense_id, approver_id, status }]);
+      .from("manager_approvals")
+      .insert([{ ticket_id, manager_id, request_owner_id, status }]);
 
     if (error) throw error;
 
