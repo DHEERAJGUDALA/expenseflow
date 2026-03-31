@@ -24,6 +24,7 @@ const CURRENCY_COUNTRIES = {
  * Create company during admin signup
  * Called after first user signs up
  * Now accepts country, currency_code, and currency_symbol from user selection
+ * CRITICAL: Prevents duplicate company names
  */
 export const createCompanyOnSignup = async (userId, userEmail, organizationName, country = 'India', currencyCode = 'INR', currencySymbol = '₹') => {
   try {
@@ -32,11 +33,29 @@ export const createCompanyOnSignup = async (userId, userEmail, organizationName,
     const validCurrencySymbol = currencySymbol || getCurrencySymbol(validCurrencyCode);
     const validCountry = country || CURRENCY_COUNTRIES[validCurrencyCode] || 'India';
 
+    const companyName = organizationName || `${userEmail.split('@')[0]}'s Company`;
+
+    // CRITICAL: Check if company name already exists (multi-tenancy requirement)
+    const { data: existingCompany, error: checkError } = await supabase
+      .from("companies")
+      .select("id, name")
+      .eq("name", companyName.trim())
+      .single();
+
+    if (existingCompany) {
+      const error = new Error(
+        `A company with the name "${companyName}" already exists. ` +
+        `Please contact your administrator for login credentials or choose a different company name.`
+      );
+      error.code = 'DUPLICATE_COMPANY_NAME';
+      throw error;
+    }
+
     // Create company with full currency data
     const { data: company, error: companyError } = await supabase
       .from("companies")
       .insert({
-        name: organizationName || `${userEmail.split('@')[0]}'s Company`,
+        name: companyName,
         country: validCountry,
         currency: validCurrencyCode,        // Legacy column (kept for backward compatibility)
         currency_code: validCurrencyCode,   // New: 3-letter ISO code
@@ -46,7 +65,18 @@ export const createCompanyOnSignup = async (userId, userEmail, organizationName,
       .select()
       .single();
 
-    if (companyError) throw companyError;
+    if (companyError) {
+      // Check if error is due to unique constraint violation (extra safety)
+      if (companyError.code === '23505' || companyError.message?.includes('unique')) {
+        const error = new Error(
+          `A company with the name "${companyName}" already exists. ` +
+          `Please contact your administrator for login credentials.`
+        );
+        error.code = 'DUPLICATE_COMPANY_NAME';
+        throw error;
+      }
+      throw companyError;
+    }
 
     // Create admin profile linked to company
     const { error: profileError } = await supabase
