@@ -7,6 +7,7 @@ import { SignupPage } from "./pages/SignupPage";
 import { ExpenseFormPage } from "./pages/ExpenseFormPage";
 import { ExpenseListPage } from "./pages/ExpenseListPage";
 import { EmployeeManagementPage } from "./pages/EmployeeManagementPage";
+import { ApprovalsPage } from "./pages/ApprovalsPage";
 
 function App() {
   return (
@@ -21,8 +22,7 @@ function App() {
         <Route path="/app/expenses" element={<ExpenseListPage />} />
         <Route path="/app/expenses/new" element={<ExpenseFormPage />} />
         <Route path="/app/employees" element={<EmployeeManagementPage />} />
-        {/* Placeholder routes for future pages */}
-        <Route path="/app/approvals" element={<DashboardPage />} />
+        <Route path="/app/approvals" element={<ApprovalsPage />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/login" replace />} />

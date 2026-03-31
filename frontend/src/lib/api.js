@@ -154,6 +154,12 @@ export const ocrApi = {
 // ===================
 
 export const approvalApi = {
+  // Get pending approvals for manager/admin
+  getPendingApprovals: () => apiRequest("/approvals/pending"),
+  
+  // Get approval history
+  getApprovalHistory: () => apiRequest("/approvals/history"),
+  
   // Approve/Reject expense
   process: (expenseId, approverId, status, comments) => apiRequest("/approvals", {
     method: "POST",
