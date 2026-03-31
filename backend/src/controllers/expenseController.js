@@ -53,6 +53,9 @@ async function getExchangeRate(baseCurrency, targetCurrency) {
 export const createExpense = async (req, res) => {
   try {
     const userId = req.user.id;
+    const userEmail = req.user.email;
+    const userRole = req.user.user_metadata?.role || "employee";
+    
     const {
       amount,
       currency_code,
@@ -71,6 +74,31 @@ export const createExpense = async (req, res) => {
       return res.status(400).json({ 
         error: "Amount, category, and description are required" 
       });
+    }
+
+    // Ensure user has a profile record (auto-create if missing)
+    const { data: existingProfile, error: profileCheckError } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("id", userId)
+      .single();
+
+    if (!existingProfile) {
+      // Create profile for this user
+      const { error: createProfileError } = await supabase
+        .from("profiles")
+        .insert({
+          id: userId,
+          email: userEmail,
+          role: userRole
+        });
+
+      if (createProfileError) {
+        console.error("Error creating profile:", createProfileError);
+        return res.status(500).json({ 
+          error: "Failed to create user profile. Please contact admin." 
+        });
+      }
     }
 
     // Create expense using the existing schema
@@ -137,16 +165,17 @@ export const getMyExpenses = async (req, res) => {
 export const getExpenses = async (req, res) => {
   try {
     const userId = req.user.id;
+    const userMetadataRole = req.user.user_metadata?.role;
     const { status, user_id, limit = 50, offset = 0 } = req.query;
 
-    // Get current user's role
-    const { data: currentUser, error: userError } = await supabase
+    // Get current user's role from profile or metadata
+    const { data: currentUser } = await supabase
       .from("profiles")
       .select("role")
       .eq("id", userId)
       .single();
 
-    if (userError) throw userError;
+    const userRole = currentUser?.role || userMetadataRole || "employee";
 
     // Build query
     let query = supabase
@@ -159,9 +188,9 @@ export const getExpenses = async (req, res) => {
       .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
 
     // If not admin, only show own expenses or team expenses
-    if (currentUser.role === "employee") {
+    if (userRole === "employee") {
       query = query.eq("user_id", userId);
-    } else if (currentUser.role === "manager") {
+    } else if (userRole === "manager") {
       // Get team member IDs
       const { data: teamMembers } = await supabase
         .from("profiles")
@@ -328,22 +357,23 @@ export const deleteExpense = async (req, res) => {
 export const getExpenseStats = async (req, res) => {
   try {
     const userId = req.user.id;
+    const userMetadataRole = req.user.user_metadata?.role;
 
-    // Get user's role
-    const { data: currentUser, error: userError } = await supabase
+    // Get user's role from profile or metadata
+    const { data: currentUser } = await supabase
       .from("profiles")
       .select("role")
       .eq("id", userId)
       .single();
 
-    if (userError) throw userError;
+    const userRole = currentUser?.role || userMetadataRole || "employee";
 
     // Get expenses based on role
     let query = supabase
       .from("expenses")
       .select("status, amount, category");
 
-    if (currentUser.role === "employee") {
+    if (userRole === "employee") {
       query = query.eq("user_id", userId);
     }
     // Admin sees all, manager logic can be added
