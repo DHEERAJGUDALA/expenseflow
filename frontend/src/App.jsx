@@ -12,6 +12,11 @@ import { EmployeeManagementPage } from "./pages/EmployeeManagementPage";
 import { ApprovalsPage } from "./pages/ApprovalsPage";
 import { TeamExpensesPage } from "./pages/TeamExpensesPage";
 import { ManagerLeaveManagementPage } from "./pages/ManagerLeaveManagementPage";
+import { RuleBuilderPage } from "./pages/RuleBuilderPage";
+import { ManagerQueuePage } from "./pages/ManagerQueuePage";
+import { ManagerSpecialQueuePage } from "./pages/ManagerSpecialQueuePage";
+import { ManagerTeamExpensesPage } from "./pages/ManagerTeamExpensesPage";
+import { AdminApprovalsPage } from "./pages/AdminApprovalsPage";
 
 function App() {
   return (
@@ -33,6 +38,11 @@ function App() {
         <Route path="/app/approvals" element={<ApprovalsPage />} />
         <Route path="/app/team-expenses" element={<TeamExpensesPage />} />
         <Route path="/app/manager-leave" element={<ManagerLeaveManagementPage />} />
+        <Route path="/app/admin/rules" element={<RuleBuilderPage />} />
+        <Route path="/manager/queue" element={<ManagerQueuePage />} />
+        <Route path="/manager/special-queue" element={<ManagerSpecialQueuePage />} />
+        <Route path="/manager/team" element={<ManagerTeamExpensesPage />} />
+        <Route path="/admin/approvals" element={<AdminApprovalsPage />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/login" replace />} />
