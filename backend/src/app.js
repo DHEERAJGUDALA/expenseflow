@@ -4,6 +4,8 @@ import cors from "cors";
 import userRoutes from "./routes/userRoutes.js";
 import expenseRoutes from "./routes/expenseRoutes.js";
 import approvalRoutes from "./routes/approvalRoutes.js";
+import approvalRuleRoutes from "./routes/approvalRuleRoutes.js";
+import managerRoutes from "./routes/managerRoutes.js";
 import employeeRoutes from "./routes/employeeRoutes.js";
 import ocrRoutes from "./routes/ocrRoutes.js";
 import workflowRoutes from "./routes/workflowRoutes.js";
@@ -29,6 +31,8 @@ app.get("/health", (req, res) => {
 app.use("/api/users", userRoutes);
 app.use("/api/expenses", expenseRoutes);
 app.use("/api/approvals", approvalRoutes);
+app.use("/api/approval-rules", approvalRuleRoutes);
+app.use("/api/manager", managerRoutes);
 app.use("/api/employees", employeeRoutes);
 app.use("/api/ocr", ocrRoutes);
 app.use("/api/workflows", workflowRoutes);
