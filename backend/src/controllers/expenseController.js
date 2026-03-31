@@ -1,5 +1,5 @@
 import { supabase } from "../config/supabaseClient.js";
-import { initializeExpenseWorkflow } from "../services/approvalWorkflowEngine.js";
+import { matchRule, buildApprovalChain } from "../services/approvalEngine.js";
 import { convertToBase, getExchangeRate, getCommonCurrencies, getCurrencySymbol } from "../services/currencyService.js";
 
 /**
@@ -175,22 +175,34 @@ export const createExpense = async (req, res) => {
 
     if (expError) throw expError;
 
-    // Initialize approval workflow using CONVERTED amount for threshold matching
+    // ═══════════════════════════════════════════════════════════════
+    // APPROVAL ENGINE — match rule and build chain
+    // If either fails, rollback the expense and return the error
+    // ═══════════════════════════════════════════════════════════════
+    console.log(`[createExpense] Expense inserted: id=${expense.id}, category=${expense.category}, amount=${expense.converted_amount || expense.amount}`);
+    console.log(`[createExpense] Calling matchRule with companyId=${companyId}...`);
     try {
-      const workflowResult = await initializeExpenseWorkflow(
-        expense.id, 
-        userId, 
-        convertedAmount,  // Use converted amount for rule matching
-        category
-      );
+      const rule = await matchRule(expense, companyId);
+      console.log(`[createExpense] matchRule returned: rule="${rule.name}", id=${rule.id}`);
       
-      if (workflowResult) {
-        console.log(`Workflow initialized for expense ${expense.id}:`, workflowResult.message);
-      }
+      console.log(`[createExpense] Calling buildApprovalChain...`);
+      const chainResult = await buildApprovalChain(expense, rule, userId);
+      console.log(`[createExpense] ✅ Approval chain built: ${chainResult.ruleApplied} (${chainResult.steps.length} steps)`);
     } catch (workflowError) {
-      console.error("Error initializing workflow:", workflowError);
-      // Don't fail expense creation if workflow fails - expense stays in pending
-      // Admin can manually assign approvers later
+      console.error(`[createExpense] ❌ APPROVAL ENGINE FAILED:`, workflowError.message);
+      console.error(`[createExpense] ❌ Full error:`, workflowError);
+      // Rollback: delete the expense
+      console.log(`[createExpense] Rolling back expense ${expense.id}...`);
+      const { error: deleteError } = await supabase.from("expenses").delete().eq("id", expense.id);
+      if (deleteError) {
+        console.error(`[createExpense] ❌ ROLLBACK ALSO FAILED:`, deleteError);
+      } else {
+        console.log(`[createExpense] ✅ Expense rolled back successfully`);
+      }
+      return res.status(400).json({
+        error: workflowError.message,
+        hint: "Contact your admin to configure approval rules for this category."
+      });
     }
 
     res.status(201).json({
@@ -242,17 +254,16 @@ export const getMyExpenses = async (req, res) => {
     // For each expense, get the current approver info
     const expensesWithApprover = await Promise.all(
       expenses.map(async (expense) => {
-        // Get current pending approver
+        // Get current pending approver from expense_approval_steps
         const { data: pendingApprover } = await supabase
-          .from("approval_logs")
+          .from("expense_approval_steps")
           .select(`
             approver_id,
             step_order,
-            approver:approver_id (email, job_title)
+            approver:approver_id (email, full_name, job_title)
           `)
           .eq("expense_id", expense.id)
-          .eq("action", "PENDING")
-          .eq("type", "SEQUENTIAL")
+          .eq("status", "PENDING")
           .order("step_order", { ascending: true })
           .limit(1)
           .single();
@@ -261,7 +272,7 @@ export const getMyExpenses = async (req, res) => {
           ...expense,
           current_approver: pendingApprover ? {
             email: pendingApprover.approver?.email,
-            name: pendingApprover.approver?.email?.split('@')[0],
+            name: pendingApprover.approver?.full_name || pendingApprover.approver?.email?.split('@')[0],
             job_title: pendingApprover.approver?.job_title,
             step: pendingApprover.step_order
           } : null
@@ -277,6 +288,7 @@ export const getMyExpenses = async (req, res) => {
 
 /**
  * Get all expenses (Admin/Manager view with filters)
+ * CRITICAL: Only returns expenses from same company
  */
 export const getExpenses = async (req, res) => {
   try {
@@ -284,22 +296,31 @@ export const getExpenses = async (req, res) => {
     const userMetadataRole = req.user.user_metadata?.role;
     const { status, user_id, limit = 50, offset = 0 } = req.query;
 
-    // Get current user's role from profile or metadata
+    // Get current user's role AND company_id from profile
     const { data: currentUser } = await supabase
       .from("profiles")
-      .select("role")
+      .select("role, company_id")
       .eq("id", userId)
       .single();
 
+    if (!currentUser) {
+      return res.status(404).json({ error: "User profile not found" });
+    }
+
+    if (!currentUser.company_id) {
+      return res.status(403).json({ error: "No company assigned to your account" });
+    }
+
     const userRole = currentUser?.role || userMetadataRole || "employee";
 
-    // Build query
+    // Build query with MANDATORY company_id filter
     let query = supabase
       .from("expenses")
       .select(`
         *,
         user:user_id (id, email, role)
       `)
+      .eq("company_id", currentUser.company_id) // MULTI-TENANCY FILTER
       .order("created_at", { ascending: false })
       .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
 
@@ -307,11 +328,12 @@ export const getExpenses = async (req, res) => {
     if (userRole === "employee") {
       query = query.eq("user_id", userId);
     } else if (userRole === "manager") {
-      // Get team member IDs
+      // Get team member IDs (already scoped to company in employeeController)
       const { data: teamMembers } = await supabase
         .from("profiles")
         .select("id")
-        .eq("manager_id", userId);
+        .eq("manager_id", userId)
+        .eq("company_id", currentUser.company_id); // Extra safety
       
       const teamIds = teamMembers?.map(m => m.id) || [];
       teamIds.push(userId); // Include own expenses
@@ -322,7 +344,18 @@ export const getExpenses = async (req, res) => {
       query = query.eq("status", status);
     }
 
+    // If filtering by user_id, verify that user is in same company
     if (user_id) {
+      const { data: targetUser } = await supabase
+        .from("profiles")
+        .select("company_id")
+        .eq("id", user_id)
+        .single();
+
+      if (targetUser?.company_id !== currentUser.company_id) {
+        return res.status(403).json({ error: "Cannot view expenses from different company" });
+      }
+
       query = query.eq("user_id", user_id);
     }
 
@@ -338,10 +371,27 @@ export const getExpenses = async (req, res) => {
 
 /**
  * Get single expense by ID
+ * CRITICAL: Only returns expense if it belongs to user's company
  */
 export const getExpenseById = async (req, res) => {
   try {
     const { id } = req.params;
+    const userId = req.user.id;
+
+    // Get current user's company_id
+    const { data: currentUser } = await supabase
+      .from("profiles")
+      .select("company_id")
+      .eq("id", userId)
+      .single();
+
+    if (!currentUser) {
+      return res.status(404).json({ error: "User profile not found" });
+    }
+
+    if (!currentUser.company_id) {
+      return res.status(403).json({ error: "No company assigned to your account" });
+    }
 
     const { data: expense, error } = await supabase
       .from("expenses")
@@ -349,81 +399,90 @@ export const getExpenseById = async (req, res) => {
         *,
         user:user_id (id, email, role, manager_id),
         employee:employee_id (id, email, role, job_title, manager_id),
-        payment_cycle:payment_cycle_id (id, process_date, status)
+        payment_cycle:payment_cycle_id (id, process_date, status),
+        rule:applied_rule_id (id, name, specific_approver_id, min_approval_percentage)
       `)
       .eq("id", id)
+      .eq("company_id", currentUser.company_id) // MULTI-TENANCY FILTER
       .single();
 
-    if (error) throw error;
-
-    if (!expense) {
-      return res.status(404).json({ error: "Expense not found" });
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return res.status(404).json({ error: "Expense not found or not in your company" });
+      }
+      throw error;
     }
 
-    // Get approval chain with approver details
-    const { data: approvalLogs, error: logsError } = await supabase
-      .from("approval_logs")
+    if (!expense) {
+      return res.status(404).json({ error: "Expense not found or not in your company" });
+    }
+
+    // Get approval steps from expense_approval_steps (the new table)
+    const { data: approvalSteps, error: stepsError } = await supabase
+      .from("expense_approval_steps")
       .select(`
         id,
         approver_id,
         step_order,
-        type,
-        is_required,
-        action,
+        status,
         comment,
+        actioned_at,
         created_at,
-        updated_at,
-        approver:approver_id (id, email, job_title, role)
+        approver:approver_id (id, email, full_name, job_title, role)
       `)
       .eq("expense_id", id)
-      .order("step_order", { ascending: true, nullsFirst: false });
+      .order("step_order", { ascending: true });
 
-    if (logsError) throw logsError;
+    if (stepsError) throw stepsError;
 
-    // Separate sequential and parallel approvers
-    const sequentialApprovers = approvalLogs
-      .filter(l => l.type === 'SEQUENTIAL')
-      .map(l => ({
-        step: l.step_order,
-        approver: {
-          id: l.approver_id,
-          email: l.approver?.email,
-          name: l.approver?.email?.split('@')[0],
-          job_title: l.approver?.job_title || l.approver?.role
-        },
-        is_required: l.is_required,
-        status: l.action?.toLowerCase(),
-        comment: l.comment,
-        decided_at: l.action === 'APPROVED' || l.action === 'REJECTED' ? l.updated_at : null
-      }));
+    // Map steps to response shape
+    const steps = (approvalSteps || []).map(s => ({
+      step: s.step_order,
+      approver: {
+        id: s.approver_id,
+        email: s.approver?.email,
+        name: s.approver?.full_name || s.approver?.email?.split('@')[0],
+        job_title: s.approver?.job_title || s.approver?.role
+      },
+      status: s.status?.toLowerCase(),
+      comment: s.comment,
+      actioned_at: s.actioned_at,
+      created_at: s.created_at
+    }));
 
-    const parallelApprovers = approvalLogs
-      .filter(l => l.type === 'PARALLEL')
-      .map(l => ({
-        approver: {
-          id: l.approver_id,
-          email: l.approver?.email,
-          name: l.approver?.email?.split('@')[0],
-          job_title: l.approver?.job_title || 'Special Approver'
-        },
-        status: l.action?.toLowerCase(),
-        comment: l.comment,
-        decided_at: l.action === 'APPROVED' || l.action === 'REJECTED' ? l.updated_at : null
-      }));
+    // Get special approver info if rule has one
+    let specialApprover = null;
+    if (expense.rule?.specific_approver_id) {
+      const { data: spApprover } = await supabase
+        .from("profiles")
+        .select("id, email, full_name, job_title, role")
+        .eq("id", expense.rule.specific_approver_id)
+        .single();
 
-    // Find current approver (who is PENDING)
-    const currentApprover = sequentialApprovers.find(a => a.status === 'pending');
+      if (spApprover) {
+        specialApprover = {
+          id: spApprover.id,
+          name: spApprover.full_name || spApprover.email?.split('@')[0],
+          email: spApprover.email,
+          job_title: spApprover.job_title || 'Special Approver',
+        };
+      }
+    }
 
-    res.json({ 
+    // Find current approver
+    const currentApprover = steps.find(s => s.status === 'pending');
+
+    res.json({
       expense,
       approval_chain: {
-        sequential: sequentialApprovers,
-        parallel: parallelApprovers,
+        steps,
+        special_approver: specialApprover,
         current_approver: currentApprover || null,
+        applied_rule_name: expense.rule?.name || null,
         summary: {
-          total_steps: sequentialApprovers.length,
-          completed_steps: sequentialApprovers.filter(a => a.status === 'approved').length,
-          has_special_approvers: parallelApprovers.length > 0
+          total_steps: steps.length,
+          completed_steps: steps.filter(s => s.status === 'approved').length,
+          has_special_approver: !!specialApprover
         }
       }
     });
@@ -433,64 +492,15 @@ export const getExpenseById = async (req, res) => {
 };
 
 /**
- * Update expense (only pending expenses can be edited)
+ * UPDATE EXPENSE — DISABLED
+ * Expenses are fully locked after submission per spec.
+ * Employee must delete and resubmit if changes are needed.
  */
 export const updateExpense = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const userId = req.user.id;
-    const {
-      amount,
-      category,
-      description,
-      expense_date,
-      paid_by,
-      remarks
-    } = req.body;
-
-    // Get expense and verify ownership
-    const { data: expense, error: expError } = await supabase
-      .from("expenses")
-      .select("user_id, status")
-      .eq("id", id)
-      .single();
-
-    if (expError || !expense) {
-      return res.status(404).json({ error: "Expense not found" });
-    }
-
-    if (expense.user_id !== userId) {
-      return res.status(403).json({ error: "Cannot edit another user's expense" });
-    }
-
-    if (expense.status !== "pending") {
-      return res.status(400).json({ 
-        error: "Cannot edit expense that is already processed" 
-      });
-    }
-
-    // Prepare update data
-    const updateData = {};
-    if (amount !== undefined) updateData.amount = parseFloat(amount);
-    if (category !== undefined) updateData.category = category;
-    if (description !== undefined) updateData.description = description;
-    if (expense_date !== undefined) updateData.expense_date = expense_date;
-    if (paid_by !== undefined) updateData.paid_by = paid_by;
-    if (remarks !== undefined) updateData.remarks = remarks;
-
-    const { data: updated, error } = await supabase
-      .from("expenses")
-      .update(updateData)
-      .eq("id", id)
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    res.json({ expense: updated, message: "Expense updated successfully" });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  return res.status(403).json({
+    error: "Expenses cannot be edited after submission",
+    hint: "Delete this expense and submit a new one if changes are needed."
+  });
 };
 
 /**
@@ -500,15 +510,25 @@ export const deleteExpense = async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user.id;
+    const companyId = req.user.profile?.company_id;
 
-    // Get expense and verify ownership
+    if (!companyId) {
+      return res.status(403).json({ error: "Company context required" });
+    }
+
+    // Get expense and verify ownership AND company isolation
     const { data: expense, error: expError } = await supabase
       .from("expenses")
-      .select("user_id, status")
+      .select("user_id, status, company_id")
       .eq("id", id)
       .single();
 
     if (expError || !expense) {
+      return res.status(404).json({ error: "Expense not found" });
+    }
+
+    // MULTI-TENANCY: Verify expense belongs to user's company
+    if (expense.company_id !== companyId) {
       return res.status(404).json({ error: "Expense not found" });
     }
 
@@ -525,7 +545,8 @@ export const deleteExpense = async (req, res) => {
     const { error } = await supabase
       .from("expenses")
       .delete()
-      .eq("id", id);
+      .eq("id", id)
+      .eq("company_id", companyId); // Double-check company isolation
 
     if (error) throw error;
 
@@ -542,6 +563,11 @@ export const getExpenseStats = async (req, res) => {
   try {
     const userId = req.user.id;
     const userMetadataRole = req.user.user_metadata?.role;
+    const companyId = req.user.profile?.company_id;
+
+    if (!companyId) {
+      return res.status(403).json({ error: "Company context required" });
+    }
 
     // Get user's role from profile or metadata
     const { data: currentUser } = await supabase
@@ -552,15 +578,16 @@ export const getExpenseStats = async (req, res) => {
 
     const userRole = currentUser?.role || userMetadataRole || "employee";
 
-    // Get expenses based on role
+    // Get expenses based on role - ALWAYS filter by company_id for multi-tenancy
     let query = supabase
       .from("expenses")
-      .select("status, amount, category");
+      .select("status, amount, category")
+      .eq("company_id", companyId); // MULTI-TENANCY: Always filter by company
 
     if (userRole === "employee") {
       query = query.eq("user_id", userId);
     }
-    // Admin sees all, manager logic can be added
+    // Admin/manager sees all expenses within their company only
 
     const { data: expenses, error } = await query;
 
@@ -660,17 +687,34 @@ export const getAvailableCurrencies = async (req, res) => {
 /**
  * Get team expenses (Manager view)
  * Returns all expenses from direct reports with filters
+ * CRITICAL: Scoped to user's company for multi-tenancy
  */
 export const getTeamExpenses = async (req, res) => {
   try {
     const userId = req.user.id;
     const { status, category, from_date, to_date, limit = 50, offset = 0 } = req.query;
 
-    // Get team members who report to this manager
+    // Get current user's profile with company_id
+    const { data: currentUser, error: userError } = await supabase
+      .from("profiles")
+      .select("id, role, company_id")
+      .eq("id", userId)
+      .single();
+
+    if (userError || !currentUser) {
+      return res.status(404).json({ error: "User profile not found" });
+    }
+
+    if (!currentUser.company_id) {
+      return res.status(403).json({ error: "No company assigned to your account" });
+    }
+
+    // Get team members who report to this manager AND are in same company
     const { data: teamMembers, error: teamError } = await supabase
       .from("profiles")
       .select("id, email, job_title")
-      .eq("manager_id", userId);
+      .eq("manager_id", userId)
+      .eq("company_id", currentUser.company_id);  // MULTI-TENANCY FILTER
 
     if (teamError) throw teamError;
 
@@ -684,7 +728,7 @@ export const getTeamExpenses = async (req, res) => {
 
     const teamIds = teamMembers.map(m => m.id);
 
-    // Build query for team expenses
+    // Build query for team expenses - CRITICAL: Filter by company_id
     let query = supabase
       .from("expenses")
       .select(`
@@ -692,6 +736,7 @@ export const getTeamExpenses = async (req, res) => {
         employee:employee_id (id, email, job_title)
       `)
       .in("employee_id", teamIds)
+      .eq("company_id", currentUser.company_id)  // MULTI-TENANCY FILTER
       .order("created_at", { ascending: false })
       .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
 
@@ -713,11 +758,12 @@ export const getTeamExpenses = async (req, res) => {
 
     if (error) throw error;
 
-    // Get total count
+    // Get total count - CRITICAL: Filter by company_id
     let countQuery = supabase
       .from("expenses")
       .select("*", { count: 'exact', head: true })
-      .in("employee_id", teamIds);
+      .in("employee_id", teamIds)
+      .eq("company_id", currentUser.company_id);  // MULTI-TENANCY FILTER
 
     if (status) countQuery = countQuery.eq("status", status);
     if (category) countQuery = countQuery.eq("category", category);
