@@ -1,22 +1,38 @@
 import { useState, useEffect } from "react";
-import { Link } from "react-router-dom";
+import { Link, Navigate } from "react-router-dom";
+import { motion } from "framer-motion";
 import { DashboardLayout } from "../components/DashboardLayout";
 import { useAuth } from "../context/AuthContext";
 import { expenseApi, employeeApi } from "../lib/api";
+import { PlusCircle, Receipt, CheckCircle, Clock, TrendingUp, DollarSign, ArrowRight } from "lucide-react";
+
+const CATEGORY_ICONS = {
+  meals: "🍽️", travel: "✈️", accommodation: "🏨", transport: "🚗",
+  office_supplies: "📎", entertainment: "🎬", communication: "📱",
+  software: "💻", equipment: "🖥️", other: "📦"
+};
+
+const fadeIn = (delay = 0) => ({
+  initial: { opacity: 0, y: 12 },
+  animate: { opacity: 1, y: 0 },
+  transition: { duration: 0.35, delay, ease: "easeOut" }
+});
 
 export function DashboardPage() {
   const { user } = useAuth();
   const [stats, setStats] = useState(null);
   const [recentExpenses, setRecentExpenses] = useState([]);
-  const [profile, setProfile] = useState(null);
+  const [userProfile, setUserProfile] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  const role = user?.user_metadata?.role || "employee";
-  const fullName = user?.user_metadata?.full_name || user?.email;
+  const role = user?.role || "employee";
+  const fullName = user?.full_name || user?.email;
 
-  useEffect(() => {
-    loadDashboardData();
-  }, []);
+  useEffect(() => { loadDashboardData(); }, []);
+
+  if (role === "manager") {
+    return <Navigate to="/manager/queue" replace />;
+  }
 
   const loadDashboardData = async () => {
     setIsLoading(true);
@@ -26,10 +42,9 @@ export function DashboardPage() {
         expenseApi.getMyExpenses({ limit: 5 }).catch(() => ({ expenses: [] })),
         employeeApi.getMyProfile().catch(() => null)
       ]);
-
       setStats(statsData?.stats);
       setRecentExpenses(expensesData?.expenses || []);
-      setProfile(profileData?.employee);
+      setUserProfile(profileData?.employee);
     } catch (err) {
       console.error("Dashboard load error:", err);
     } finally {
@@ -37,11 +52,9 @@ export function DashboardPage() {
     }
   };
 
-  const formatCurrency = (amount, currency = "USD") => {
-    return new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: currency
-    }).format(amount || 0);
+  const formatCurrency = (amount, currency = "INR") => {
+    try { return new Intl.NumberFormat("en-IN", { style: "currency", currency }).format(amount || 0); }
+    catch { return `${currency} ${parseFloat(amount || 0).toFixed(2)}`; }
   };
 
   const getGreeting = () => {
@@ -51,13 +64,23 @@ export function DashboardPage() {
     return "Good evening";
   };
 
+  const getStatusBadge = (status) => {
+    const map = {
+      approved: "badge-success",
+      pending: "badge-warning",
+      rejected: "badge-danger",
+      draft: "badge-neutral",
+    };
+    return map[status] || "badge-neutral";
+  };
+
   if (isLoading) {
     return (
       <DashboardLayout>
-        <div className="p-6 flex items-center justify-center min-h-96">
+        <div className="p-8 flex items-center justify-center min-h-96">
           <div className="text-center">
-            <span className="animate-spin inline-block text-4xl mb-4">⏳</span>
-            <p className="text-slate-600">Loading dashboard...</p>
+            <div className="spinner spinner-lg mx-auto mb-4" />
+            <p style={{ color: "var(--text-muted)", fontSize: "13px" }}>Loading dashboard...</p>
           </div>
         </div>
       </DashboardLayout>
@@ -66,168 +89,178 @@ export function DashboardPage() {
 
   return (
     <DashboardLayout>
-      <div className="p-6">
+      <div className="p-6 lg:p-8 max-w-6xl">
         {/* Welcome Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-slate-900">
-            {getGreeting()}, {fullName?.split(" ")[0]}!
+        <motion.div {...fadeIn(0)} className="page-header">
+          <h1 className="page-title" style={{ fontSize: "28px" }}>
+            {getGreeting()}, {fullName?.split(" ")[0]} 👋
           </h1>
-          <p className="text-slate-600 mt-1">
-            {profile?.company?.name && `${profile.company.name} • `}
+          <p className="page-subtitle">
+            {userProfile?.company?.name && `${userProfile.company.name} · `}
             Here's your expense overview
           </p>
-        </div>
+        </motion.div>
 
         {/* Quick Actions */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+        <motion.div {...fadeIn(0.05)} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
           <Link
             to="/app/expenses/new"
-            className="p-6 bg-gradient-to-br from-indigo-500 to-indigo-600 text-white rounded-xl hover:from-indigo-600 hover:to-indigo-700 transition-all shadow-lg hover:shadow-xl"
+            className="card card-hover flex items-center gap-4 p-5 group"
+            style={{ borderLeft: "3px solid var(--accent)" }}
           >
-            <div className="text-3xl mb-3">📷</div>
-            <h3 className="font-semibold text-lg">Submit Expense</h3>
-            <p className="text-indigo-100 text-sm mt-1">Scan receipt with OCR</p>
+            <div
+              className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0"
+              style={{ background: "var(--accent-subtle)", color: "var(--accent)" }}
+            >
+              <PlusCircle size={20} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h3 className="font-semibold text-sm" style={{ color: "var(--text-primary)", fontFamily: "var(--font-heading)" }}>Submit Expense</h3>
+              <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>Scan receipt with OCR</p>
+            </div>
+            <ArrowRight size={16} style={{ color: "var(--text-placeholder)" }} className="group-hover:translate-x-1 transition-transform" />
           </Link>
 
           <Link
             to="/app/expenses"
-            className="p-6 bg-white rounded-xl border border-slate-200 hover:border-indigo-300 hover:shadow-md transition-all"
+            className="card card-hover flex items-center gap-4 p-5 group"
           >
-            <div className="text-3xl mb-3">📋</div>
-            <h3 className="font-semibold text-lg text-slate-900">View Expenses</h3>
-            <p className="text-slate-500 text-sm mt-1">Track your submissions</p>
+            <div
+              className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0"
+              style={{ background: "var(--bg-elevated)", color: "var(--text-secondary)" }}
+            >
+              <Receipt size={20} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h3 className="font-semibold text-sm" style={{ color: "var(--text-primary)", fontFamily: "var(--font-heading)" }}>View Expenses</h3>
+              <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>Track your submissions</p>
+            </div>
+            <ArrowRight size={16} style={{ color: "var(--text-placeholder)" }} className="group-hover:translate-x-1 transition-transform" />
           </Link>
 
-          {(role === "admin" || role === "manager") && (
+          {role === "admin" && (
             <Link
               to="/app/approvals"
-              className="p-6 bg-white rounded-xl border border-slate-200 hover:border-indigo-300 hover:shadow-md transition-all"
+              className="card card-hover flex items-center gap-4 p-5 group"
             >
-              <div className="text-3xl mb-3">✅</div>
-              <h3 className="font-semibold text-lg text-slate-900">Approvals</h3>
-              <p className="text-slate-500 text-sm mt-1">Review pending requests</p>
+              <div
+                className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0"
+                style={{ background: "var(--success-subtle)", color: "var(--success)" }}
+              >
+                <CheckCircle size={20} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="font-semibold text-sm" style={{ color: "var(--text-primary)", fontFamily: "var(--font-heading)" }}>Approvals</h3>
+                <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>Review pending requests</p>
+              </div>
+              <ArrowRight size={16} style={{ color: "var(--text-placeholder)" }} className="group-hover:translate-x-1 transition-transform" />
             </Link>
           )}
-        </div>
+        </motion.div>
 
         {/* Stats Grid */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-          <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-200">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-2xl">📊</span>
-              <span className="text-xs text-slate-400">Total</span>
+        <motion.div {...fadeIn(0.1)} className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+          {[
+            { label: "Total Expenses", value: stats?.total_count || 0, icon: TrendingUp, color: "var(--accent)" },
+            { label: "Pending", value: formatCurrency(stats?.pending_amount, stats?.currency), icon: Clock, color: "var(--warning)" },
+            { label: "Approved", value: formatCurrency(stats?.approved_amount, stats?.currency), icon: CheckCircle, color: "var(--success)" },
+            { label: "Total Value", value: formatCurrency(stats?.total_amount, stats?.currency), icon: DollarSign, color: "var(--text-primary)" },
+          ].map((stat, i) => (
+            <div key={stat.label} className="stat-card">
+              <div className="flex items-center justify-between mb-3">
+                <stat.icon size={16} style={{ color: stat.color }} />
+                <span className="stat-label" style={{ margin: 0 }}>{stat.label}</span>
+              </div>
+              <p className="stat-value" style={{ color: stat.color, fontSize: typeof stat.value === "number" ? "28px" : "22px" }}>
+                {stat.value}
+              </p>
             </div>
-            <p className="text-2xl font-bold text-slate-900">{stats?.total_count || 0}</p>
-            <p className="text-sm text-slate-500">Expenses submitted</p>
-          </div>
-
-          <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-200">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-2xl">⏳</span>
-              <span className="text-xs text-yellow-500 font-medium">Pending</span>
-            </div>
-            <p className="text-2xl font-bold text-yellow-600">
-              {formatCurrency(stats?.pending_amount, stats?.currency)}
-            </p>
-            <p className="text-sm text-slate-500">Awaiting approval</p>
-          </div>
-
-          <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-200">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-2xl">✅</span>
-              <span className="text-xs text-green-500 font-medium">Approved</span>
-            </div>
-            <p className="text-2xl font-bold text-green-600">
-              {formatCurrency(stats?.approved_amount, stats?.currency)}
-            </p>
-            <p className="text-sm text-slate-500">Reimbursement ready</p>
-          </div>
-
-          <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-200">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-2xl">💰</span>
-              <span className="text-xs text-slate-400">Total Value</span>
-            </div>
-            <p className="text-2xl font-bold text-slate-900">
-              {formatCurrency(stats?.total_amount, stats?.currency)}
-            </p>
-            <p className="text-sm text-slate-500">All time</p>
-          </div>
-        </div>
+          ))}
+        </motion.div>
 
         {/* Recent Expenses */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200">
-          <div className="p-4 border-b border-slate-200 flex justify-between items-center">
-            <h2 className="font-semibold text-slate-900">Recent Expenses</h2>
-            <Link to="/app/expenses" className="text-sm text-indigo-600 hover:text-indigo-700">
-              View all →
+        <motion.div {...fadeIn(0.15)} className="table-container">
+          <div className="px-5 py-4 flex justify-between items-center" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+            <h2 style={{ fontFamily: "var(--font-heading)", fontWeight: 700, fontSize: "15px", color: "var(--text-primary)" }}>
+              Recent Expenses
+            </h2>
+            <Link
+              to="/app/expenses"
+              className="text-xs font-semibold flex items-center gap-1 group"
+              style={{ color: "var(--accent)" }}
+            >
+              View all
+              <ArrowRight size={12} className="group-hover:translate-x-0.5 transition-transform" />
             </Link>
           </div>
 
           {recentExpenses.length === 0 ? (
-            <div className="p-8 text-center text-slate-500">
-              <span className="text-4xl mb-2 block">📭</span>
-              <p>No expenses yet</p>
+            <div className="empty-state" style={{ border: "none", borderRadius: 0 }}>
+              <div className="empty-state-icon">📭</div>
+              <div className="empty-state-title">No expenses yet</div>
               <Link
                 to="/app/expenses/new"
-                className="inline-block mt-3 text-indigo-600 hover:text-indigo-700 font-medium"
+                className="inline-block mt-3 text-sm font-semibold"
+                style={{ color: "var(--accent)" }}
               >
                 Submit your first expense →
               </Link>
             </div>
           ) : (
-            <div className="divide-y divide-slate-100">
+            <div>
               {recentExpenses.map(expense => (
-                <div key={expense.id} className="p-4 flex items-center gap-4">
-                  <div className="w-10 h-10 bg-slate-100 rounded-lg flex items-center justify-center">
-                    {expense.category === "meals" && "🍽️"}
-                    {expense.category === "travel" && "✈️"}
-                    {expense.category === "transport" && "🚗"}
-                    {!["meals", "travel", "transport"].includes(expense.category) && "📦"}
+                <Link
+                  key={expense.id}
+                  to={`/app/expenses/${expense.id}`}
+                  className="flex items-center gap-4 px-5 py-3.5 transition-colors"
+                  style={{ borderBottom: "1px solid var(--border-subtle)" }}
+                  onMouseOver={(e) => e.currentTarget.style.background = "var(--bg-card-hover)"}
+                  onMouseOut={(e) => e.currentTarget.style.background = "transparent"}
+                >
+                  <div
+                    className="w-9 h-9 rounded-lg flex items-center justify-center text-base flex-shrink-0"
+                    style={{ background: "var(--bg-elevated)" }}
+                  >
+                    {CATEGORY_ICONS[expense.category] || "📦"}
                   </div>
-                  <div className="flex-1">
-                    <p className="font-medium text-slate-900">
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-[13px]" style={{ color: "var(--text-primary)" }}>
                       {expense.merchant_name || expense.description || "Expense"}
                     </p>
-                    <p className="text-sm text-slate-500">{expense.category?.replace("_", " ")}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="font-semibold">{formatCurrency(expense.amount, expense.currency_code)}</p>
-                    <p className={`text-xs ${
-                      expense.status === "approved" ? "text-green-600" :
-                      expense.status === "pending" ? "text-yellow-600" :
-                      expense.status === "rejected" ? "text-red-600" : "text-slate-500"
-                    }`}>
-                      {expense.status}
+                    <p className="text-xs capitalize" style={{ color: "var(--text-muted)" }}>
+                      {expense.category?.replace("_", " ")}
                     </p>
                   </div>
-                </div>
+                  <div className="text-right flex-shrink-0">
+                    <p className="font-semibold text-[13px]" style={{ color: "var(--text-primary)" }}>
+                      {formatCurrency(expense.amount, expense.currency_code)}
+                    </p>
+                    <span className={`badge ${getStatusBadge(expense.status)} capitalize`} style={{ fontSize: "10px" }}>
+                      {expense.status}
+                    </span>
+                  </div>
+                </Link>
               ))}
             </div>
           )}
-        </div>
+        </motion.div>
 
         {/* Category Breakdown */}
         {stats?.by_category && Object.keys(stats.by_category).length > 0 && (
-          <div className="mt-8 bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-            <h2 className="font-semibold text-slate-900 mb-4">Expenses by Category</h2>
+          <motion.div {...fadeIn(0.2)} className="card mt-6 p-6">
+            <h2 style={{ fontFamily: "var(--font-heading)", fontWeight: 700, fontSize: "15px", color: "var(--text-primary)", marginBottom: "16px" }}>
+              Expenses by Category
+            </h2>
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
               {Object.entries(stats.by_category).map(([category, count]) => (
-                <div key={category} className="bg-slate-50 rounded-lg p-3 text-center">
-                  <p className="text-2xl mb-1">
-                    {category === "meals" && "🍽️"}
-                    {category === "travel" && "✈️"}
-                    {category === "transport" && "🚗"}
-                    {category === "accommodation" && "🏨"}
-                    {category === "office_supplies" && "📎"}
-                    {!["meals", "travel", "transport", "accommodation", "office_supplies"].includes(category) && "📦"}
-                  </p>
-                  <p className="font-semibold text-slate-900">{count}</p>
-                  <p className="text-xs text-slate-500 capitalize">{category.replace("_", " ")}</p>
+                <div key={category} className="p-3 text-center rounded-lg" style={{ background: "var(--bg-elevated)" }}>
+                  <p className="text-xl mb-1">{CATEGORY_ICONS[category] || "📦"}</p>
+                  <p className="font-bold text-base" style={{ color: "var(--text-primary)", fontFamily: "var(--font-heading)" }}>{count}</p>
+                  <p className="text-xs capitalize" style={{ color: "var(--text-muted)" }}>{category.replace("_", " ")}</p>
                 </div>
               ))}
             </div>
-          </div>
+          </motion.div>
         )}
       </div>
     </DashboardLayout>
