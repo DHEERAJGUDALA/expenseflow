@@ -1,26 +1,40 @@
-export function AuthStatusScreen({ eyebrow, title, description }) {
+import { motion } from "framer-motion";
+
+export function AuthStatusScreen({ title = "Checking authentication...", subtitle }) {
   return (
-    <main className="grid min-h-screen place-items-center bg-[radial-gradient(circle_at_top_left,rgba(255,122,26,0.16),transparent_20rem),linear-gradient(135deg,#f7f0e3_0%,#efe5d2_48%,#e5ddcb_100%)] px-4">
-      <section className="w-full max-w-xl rounded-[2rem] border border-slate-200 bg-white/85 p-8 shadow-[0_24px_60px_rgba(18,51,42,0.12)] backdrop-blur">
-        <div className="flex h-14 w-14 items-center justify-center rounded-[1.15rem] bg-slate-950 text-sm font-bold uppercase tracking-[0.2em] text-white">
-          RM
+    <div
+      className="fixed inset-0 flex items-center justify-center z-50"
+      style={{ background: "var(--sidebar-bg)" }}
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="text-center"
+      >
+        {/* Pulsing ring loader */}
+        <div className="relative w-12 h-12 mx-auto mb-6">
+          <div
+            className="absolute inset-0 rounded-full"
+            style={{
+              border: "2px solid var(--sidebar-border)",
+            }}
+          />
+          <div
+            className="absolute inset-0 rounded-full"
+            style={{
+              border: "2px solid transparent",
+              borderTopColor: "var(--accent)",
+              animation: "spin 0.8s linear infinite",
+            }}
+          />
         </div>
-        <p className="mt-6 text-xs font-bold uppercase tracking-[0.18em] text-slate-500">
-          {eyebrow}
-        </p>
-        <h1
-          className="mt-3 text-4xl leading-none text-slate-950"
-          style={{ fontFamily: '"Space Grotesk", sans-serif' }}
-        >
+        <p style={{ color: "var(--sidebar-text)", fontFamily: "var(--font-heading)", fontWeight: 600, fontSize: "15px" }}>
           {title}
-        </h1>
-        <p className="mt-4 max-w-lg text-base leading-7 text-slate-500">{description}</p>
-        <div className="mt-8 flex items-center gap-3">
-          <span className="h-3 w-3 animate-pulse rounded-full bg-orange-500" />
-          <span className="h-3 w-3 animate-pulse rounded-full bg-emerald-500 [animation-delay:160ms]" />
-          <span className="h-3 w-3 animate-pulse rounded-full bg-slate-900 [animation-delay:320ms]" />
-        </div>
-      </section>
-    </main>
+        </p>
+        {subtitle && (
+          <p className="mt-2 text-sm" style={{ color: "var(--sidebar-text-dim)" }}>{subtitle}</p>
+        )}
+      </motion.div>
+    </div>
   );
 }
