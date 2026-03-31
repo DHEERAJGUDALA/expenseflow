@@ -67,36 +67,84 @@ export async function getApplicableRule(employeeId, expenseAmount, expenseCatego
     };
   }
 
-  // Find most specific matching rule
+  // ═══════════════════════════════════════════════════════════════
+  // THRESHOLD LOGIC — THE BRAIN OF THE SYSTEM
+  // ═══════════════════════════════════════════════════════════════
+  // Rule: Below threshold → only direct manager
+  //       At or above threshold → full approval chain fires
+  // ═══════════════════════════════════════════════════════════════
+
   let matchedRule = null;
 
-  // 1. Try to match category + threshold
+  // 1. Try to match category + threshold (amount >= threshold = full chain)
   matchedRule = rules.find(
     r => r.category === expenseCategory && 
-         r.threshold_amount && 
+         r.threshold_amount !== null &&
+         r.threshold_amount !== undefined &&
          expenseAmount >= r.threshold_amount
   );
 
-  // 2. Try to match category only
+  // 2. BELOW THRESHOLD CHECK: A rule exists for this category with a threshold,
+  //    but the amount is BELOW the threshold → route to direct manager ONLY
   if (!matchedRule) {
-    matchedRule = rules.find(r => r.category === expenseCategory && !r.threshold_amount);
+    const categoryRuleWithThreshold = rules.find(
+      r => r.category === expenseCategory &&
+           r.threshold_amount !== null &&
+           r.threshold_amount !== undefined &&
+           expenseAmount < r.threshold_amount
+    );
+
+    if (categoryRuleWithThreshold) {
+      // Below threshold — only direct manager approves
+      console.log(`[Workflow] Amount ${expenseAmount} is below threshold ${categoryRuleWithThreshold.threshold_amount} for category '${expenseCategory}' — routing to direct manager only`);
+      return {
+        useDirectManagerOnly: true,
+        managerId: employee.manager_id,
+        belowThreshold: true,
+        thresholdAmount: categoryRuleWithThreshold.threshold_amount,
+        submitterRole: employee.role
+      };
+    }
   }
 
-  // 3. Try to match threshold only
+  // 3. Try to match category only (no threshold defined → always use chain)
   if (!matchedRule) {
     matchedRule = rules.find(
-      r => !r.category && 
-           r.threshold_amount && 
-           expenseAmount >= r.threshold_amount
+      r => r.category === expenseCategory &&
+           (r.threshold_amount === null || r.threshold_amount === undefined)
     );
   }
 
-  // 4. Use default rule
+  // 4. Try to match threshold only (any category, amount >= threshold)
+  if (!matchedRule) {
+    // First check if a threshold-only rule exists but amount is below it
+    const thresholdOnlyRule = rules.find(
+      r => !r.category && 
+           r.threshold_amount !== null &&
+           r.threshold_amount !== undefined
+    );
+
+    if (thresholdOnlyRule && expenseAmount >= thresholdOnlyRule.threshold_amount) {
+      matchedRule = thresholdOnlyRule;
+    } else if (thresholdOnlyRule && expenseAmount < thresholdOnlyRule.threshold_amount) {
+      // Below threshold for category-agnostic rule → direct manager only
+      console.log(`[Workflow] Amount ${expenseAmount} is below threshold ${thresholdOnlyRule.threshold_amount} (any category) — routing to direct manager only`);
+      return {
+        useDirectManagerOnly: true,
+        managerId: employee.manager_id,
+        belowThreshold: true,
+        thresholdAmount: thresholdOnlyRule.threshold_amount,
+        submitterRole: employee.role
+      };
+    }
+  }
+
+  // 5. Use default rule
   if (!matchedRule) {
     matchedRule = rules.find(r => r.is_default);
   }
 
-  // 5. Fallback to any rule
+  // 6. Fallback to any rule
   if (!matchedRule && rules.length > 0) {
     matchedRule = rules[0];
   }
@@ -104,7 +152,7 @@ export async function getApplicableRule(employeeId, expenseAmount, expenseCatego
   return {
     ...matchedRule,
     managerId: employee.manager_id,
-    submitterRole: employee.role  // Include submitter role for workflow logic
+    submitterRole: employee.role
   };
 }
 
@@ -117,7 +165,9 @@ export async function initializeExpenseWorkflow(expenseId, employeeId, expenseAm
     // Get applicable rule
     const rule = await getApplicableRule(employeeId, expenseAmount, expenseCategory);
 
-    // Simple manager approval (no rules configured)
+    // ═══════════════════════════════════════════════════════════════
+    // CASE 1: Simple manager approval (no rules configured at all)
+    // ═══════════════════════════════════════════════════════════════
     if (rule.useSimpleApproval) {
       if (!rule.managerId) {
         throw new Error("Employee has no manager assigned and no approval rules configured");
@@ -145,6 +195,43 @@ export async function initializeExpenseWorkflow(expenseId, employeeId, expenseAm
         type: 'simple', 
         managerId: rule.managerId,
         message: 'Simple manager approval workflow initialized'
+      };
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CASE 2: Below threshold — only direct manager approves
+    // Rule exists, but amount is below the threshold
+    // ═══════════════════════════════════════════════════════════════
+    if (rule.useDirectManagerOnly) {
+      if (!rule.managerId) {
+        throw new Error("Employee has no manager assigned. Admin must assign a manager before expenses can be submitted.");
+      }
+
+      console.log(`[Workflow] Below-threshold approval: only direct manager (${rule.managerId}) for expense ${expenseId}`);
+
+      const { error: logError } = await supabase
+        .from("approval_logs")
+        .insert({
+          expense_id: expenseId,
+          approver_id: rule.managerId,
+          step_order: 1,
+          type: 'SEQUENTIAL',
+          is_required: true,
+          action: 'PENDING'
+        });
+
+      if (logError) throw logError;
+
+      await supabase
+        .from("expenses")
+        .update({ current_step: 1 })
+        .eq("id", expenseId);
+
+      return {
+        type: 'below_threshold',
+        managerId: rule.managerId,
+        thresholdAmount: rule.thresholdAmount,
+        message: `Below threshold (${rule.thresholdAmount}) — routed to direct manager only`
       };
     }
 
@@ -199,6 +286,24 @@ export async function initializeExpenseWorkflow(expenseId, employeeId, expenseAm
           action: 'PENDING'
         });
       });
+    }
+
+    // Add special approver from rule (admin-assigned override approver)
+    if (rule.specific_approver_id) {
+      const alreadyIncluded = logsToInsert.some(
+        l => l.approver_id === rule.specific_approver_id
+      );
+
+      if (!alreadyIncluded) {
+        logsToInsert.push({
+          expense_id: expenseId,
+          approver_id: rule.specific_approver_id,
+          step_order: null,
+          type: 'PARALLEL',
+          is_required: false,
+          action: 'PENDING'
+        });
+      }
     }
 
     if (logsToInsert.length === 0) {
@@ -363,6 +468,7 @@ export async function processApprovalAction(expenseId, approverId, action, comme
         id,
         employee_id,
         amount,
+        converted_amount,
         category,
         status,
         current_step,
@@ -407,15 +513,9 @@ export async function processApprovalAction(expenseId, approverId, action, comme
       throw new Error("This approval was skipped");
     }
 
-    // Get the approval rule
-    const companyId = expense.employee.company_id;
-    const { data: rule, error: ruleError } = await supabase
-      .from("approval_rules")
-      .select("*")
-      .eq("company_id", companyId)
-      .maybeSingle();
-
-    if (ruleError) throw ruleError;
+    // Get the applicable rule for this expense
+    const thresholdAmount = expense.converted_amount || expense.amount;
+    const rule = await getApplicableRule(expense.employee_id, thresholdAmount, expense.category);
 
     // Update approval log
     const { error: updateError } = await supabase
@@ -461,17 +561,30 @@ export async function processApprovalAction(expenseId, approverId, action, comme
           evaluation = percentageCheck;
         } else {
           // Check if all SEQUENTIAL required approvers have approved
-          const sequentialLogs = updatedLogs.filter(l => l.type === 'SEQUENTIAL' && l.is_required);
-          const allSequentialApproved = sequentialLogs.every(l => l.action === 'APPROVED');
+          const requiredSequentialLogs = updatedLogs.filter(l => l.type === 'SEQUENTIAL' && l.is_required);
+          const allRequiredApproved = requiredSequentialLogs.every(l => l.action === 'APPROVED');
 
-          if (allSequentialApproved) {
+          // Also check: are there ANY remaining sequential steps (LOCKED or PENDING)?
+          const remainingSequential = updatedLogs.filter(
+            l => l.type === 'SEQUENTIAL' && (l.action === 'LOCKED' || (l.action === 'PENDING' && l.approver_id !== approverId))
+          );
+
+          if (allRequiredApproved && remainingSequential.length === 0) {
+            // All required approved AND no more sequential steps left
             evaluation = {
               finalStatus: 'APPROVED',
               reason: 'All required approvals complete',
               skipRemaining: true
             };
+          } else if (allRequiredApproved && remainingSequential.length > 0) {
+            // All required are done, but non-required LOCKED steps remain — skip them
+            evaluation = {
+              finalStatus: 'APPROVED',
+              reason: 'All required approvals complete (non-required steps skipped)',
+              skipRemaining: true
+            };
           } else {
-            // Move to next step
+            // Still waiting for next required approver — move to next step
             evaluation = {
               finalStatus: 'PENDING',
               reason: 'Approved, waiting for next approver',
