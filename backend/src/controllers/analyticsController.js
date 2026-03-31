@@ -182,18 +182,22 @@ export const getBottleneckReport = async (req, res) => {
     });
 
     // Find pending approvals - which approvers are holding things up
+    // FIXED: Use correct column names (action, step_order instead of status, step_index)
+    // MULTI-TENANCY: Filter approval_logs by expenses belonging to this company
     const { data: pendingApprovals, error: approvalError } = await supabase
       .from("approval_logs")
       .select(`
         id,
         expense_id,
-        step_index,
+        step_order,
         approver_id,
-        status,
+        action,
         created_at,
-        approver:approver_id(id, email)
+        approver:approver_id(id, email),
+        expense:expense_id(company_id)
       `)
-      .eq("status", "pending")
+      .eq("action", "PENDING")
+      .eq("expense.company_id", profile.company_id)
       .order("created_at", { ascending: true });
 
     if (approvalError) throw approvalError;
@@ -313,27 +317,30 @@ export const getApprovalMetrics = async (req, res) => {
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - parseInt(days));
 
-    // Get approval logs in date range
+    // Get approval logs in date range - MULTI-TENANCY: Filter by company via expense relation
     const { data: approvalLogs, error: logsError } = await supabase
       .from("approval_logs")
-      .select("*")
-      .gte("created_at", startDate.toISOString());
+      .select("*, expense:expense_id(company_id)")
+      .gte("created_at", startDate.toISOString())
+      .eq("expense.company_id", profile.company_id);
 
     if (logsError) throw logsError;
 
     // Calculate metrics
-    const completed = approvalLogs.filter(l => ['approved', 'rejected'].includes(l.status));
-    const approved = approvalLogs.filter(l => l.status === 'approved');
-    const rejected = approvalLogs.filter(l => l.status === 'rejected');
-    const pending = approvalLogs.filter(l => l.status === 'pending');
+    // FIXED: Use correct column name 'action' instead of 'status', uppercase enum values
+    const completed = approvalLogs.filter(l => ['APPROVED', 'REJECTED'].includes(l.action));
+    const approved = approvalLogs.filter(l => l.action === 'APPROVED');
+    const rejected = approvalLogs.filter(l => l.action === 'REJECTED');
+    const pending = approvalLogs.filter(l => l.action === 'PENDING');
 
     // Calculate average approval time for completed approvals
+    // FIXED: Use 'updated_at' instead of 'decided_at'
     let avgApprovalTimeHours = null;
-    const completedWithTime = completed.filter(l => l.decided_at);
+    const completedWithTime = completed.filter(l => l.updated_at);
     if (completedWithTime.length > 0) {
       const totalTime = completedWithTime.reduce((sum, l) => {
         const created = new Date(l.created_at);
-        const decided = new Date(l.decided_at);
+        const decided = new Date(l.updated_at);
         return sum + (decided - created);
       }, 0);
       avgApprovalTimeHours = (totalTime / completedWithTime.length / (1000 * 60 * 60)).toFixed(1);
@@ -347,7 +354,7 @@ export const getApprovalMetrics = async (req, res) => {
         approverMetrics[approverId] = { approved: 0, rejected: 0, total: 0 };
       }
       approverMetrics[approverId].total += 1;
-      if (log.status === 'approved') {
+      if (log.action === 'APPROVED') {
         approverMetrics[approverId].approved += 1;
       } else {
         approverMetrics[approverId].rejected += 1;
