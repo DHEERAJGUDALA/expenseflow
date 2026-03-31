@@ -1,38 +1,24 @@
 import { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { motion } from "framer-motion";
 import { DashboardLayout } from "../components/DashboardLayout";
 import { expenseApi } from "../lib/api";
-
-const STATUS_COLORS = {
-  draft: "bg-slate-100 text-slate-700",
-  pending: "bg-yellow-100 text-yellow-700",
-  approved: "bg-green-100 text-green-700",
-  rejected: "bg-red-100 text-red-700",
-  paid: "bg-blue-100 text-blue-700",
-  partially_approved: "bg-purple-100 text-purple-700"
-};
-
-const STATUS_LABELS = {
-  draft: "Draft",
-  pending: "Pending",
-  approved: "Approved",
-  rejected: "Rejected",
-  paid: "Paid",
-  partially_approved: "Partial"
-};
+import { 
+  Plus, Receipt, Clock, CheckCircle, XCircle, TrendingUp, 
+  DollarSign, ArrowRight, Paperclip
+} from "lucide-react";
 
 const CATEGORY_ICONS = {
-  meals: "🍽️",
-  travel: "✈️",
-  accommodation: "🏨",
-  transport: "🚗",
-  office_supplies: "📎",
-  entertainment: "🎬",
-  communication: "📱",
-  software: "💻",
-  equipment: "🖥️",
-  other: "📦"
+  meals: "🍽️", travel: "✈️", accommodation: "🏨", transport: "🚗",
+  office_supplies: "📎", entertainment: "🎬", communication: "📱",
+  software: "💻", equipment: "🖥️", other: "📦"
 };
+
+const fadeIn = (delay = 0) => ({
+  initial: { opacity: 0, y: 12 },
+  animate: { opacity: 1, y: 0 },
+  transition: { duration: 0.35, delay, ease: "easeOut" }
+});
 
 export function ExpenseListPage() {
   const navigate = useNavigate();
@@ -50,242 +36,184 @@ export function ExpenseListPage() {
   const loadExpenses = async () => {
     setIsLoading(true);
     try {
-      const params = {};
-      if (filter !== "all") {
-        params.status = filter;
-      }
+      const params = filter !== "all" ? { status: filter } : {};
       const data = await expenseApi.getMyExpenses(params);
       setExpenses(data.expenses || []);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setIsLoading(false);
-    }
+    } catch (err) { setError(err.message); }
+    finally { setIsLoading(false); }
   };
 
   const loadStats = async () => {
-    try {
-      const data = await expenseApi.getStats();
-      setStats(data.stats);
-    } catch (err) {
-      console.error("Failed to load stats:", err);
-    }
+    try { const data = await expenseApi.getStats(); setStats(data.stats); }
+    catch (err) { console.error("Failed to load stats:", err); }
   };
 
   const formatCurrency = (amount, currency = "INR") => {
-    // Use safe fallback for currencies
-    try {
-      return new Intl.NumberFormat("en-US", {
-        style: "currency",
-        currency: currency || "INR"
-      }).format(amount);
-    } catch (error) {
-      // Fallback if currency code is invalid
-      return `${currency} ${Number(amount).toFixed(2)}`;
-    }
-  };
-
-  const getCurrencySymbol = (currency) => {
-    const symbols = {
-      'INR': '₹', 'USD': '$', 'EUR': '€', 'GBP': '£', 'AUD': 'A$',
-      'CAD': 'C$', 'SGD': 'S$', 'AED': 'د.إ', 'JPY': '¥', 'CNY': '¥'
-    };
-    return symbols[currency] || currency;
+    try { return new Intl.NumberFormat("en-IN", { style: "currency", currency }).format(amount || 0); }
+    catch { return `${currency} ${parseFloat(amount || 0).toFixed(2)}`; }
   };
 
   const formatDate = (dateStr) => {
-    return new Date(dateStr).toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric"
-    });
+    return new Date(dateStr).toLocaleDateString("en-IN", { month: "short", day: "numeric", year: "numeric" });
+  };
+
+  const getStatusBadge = (status) => {
+    const map = {
+      approved: "badge-success",
+      pending: "badge-warning",
+      rejected: "badge-danger",
+      draft: "badge-neutral",
+      paid: "badge-accent"
+    };
+    return map[status] || "badge-neutral";
   };
 
   return (
     <DashboardLayout>
-      <div className="p-6">
+      <div className="p-6 lg:p-8 max-w-6xl">
         {/* Header */}
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+        <motion.div {...fadeIn(0)} className="page-header flex sm:flex-row flex-col sm:items-center justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">My Expenses</h1>
-            <p className="text-slate-600">Track and manage your expense submissions</p>
+            <h1 className="page-title">My Expenses</h1>
+            <p className="page-subtitle">Track and manage your expense submissions</p>
           </div>
-          <Link
-            to="/app/expenses/new"
-            className="px-6 py-3 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors flex items-center gap-2"
-          >
-            ➕ New Expense
+          <Link to="/app/expenses/new" className="btn btn-primary shadow-lg shadow-indigo-500/25">
+            <Plus size={18} /> New Expense
           </Link>
-        </div>
+        </motion.div>
 
         {/* Stats Cards */}
         {stats && (
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-            <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-200">
-              <p className="text-sm text-slate-500">Total Expenses</p>
-              <p className="text-2xl font-bold text-slate-900">{stats.total_count}</p>
-            </div>
-            <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-200">
-              <p className="text-sm text-slate-500">Pending Amount</p>
-              <p className="text-2xl font-bold text-yellow-600">
-                {formatCurrency(stats.pending_amount, stats.currency)}
-              </p>
-            </div>
-            <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-200">
-              <p className="text-sm text-slate-500">Approved Amount</p>
-              <p className="text-2xl font-bold text-green-600">
-                {formatCurrency(stats.approved_amount, stats.currency)}
-              </p>
-            </div>
-            <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-200">
-              <p className="text-sm text-slate-500">Total Submitted</p>
-              <p className="text-2xl font-bold text-slate-900">
-                {formatCurrency(stats.total_amount, stats.currency)}
-              </p>
-            </div>
-          </div>
+          <motion.div {...fadeIn(0.05)} className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+            {[
+              { label: "Total Expenses", value: stats.total_count || 0, icon: TrendingUp, color: "var(--accent)" },
+              { label: "Pending", value: formatCurrency(stats.pending_amount, stats.currency), icon: Clock, color: "var(--warning)" },
+              { label: "Approved", value: formatCurrency(stats.approved_amount, stats.currency), icon: CheckCircle, color: "var(--success)" },
+              { label: "Total Value", value: formatCurrency(stats.total_amount, stats.currency), icon: DollarSign, color: "var(--text-primary)" },
+            ].map((stat, i) => (
+              <div key={stat.label} className="stat-card">
+                <div className="flex items-center justify-between mb-3">
+                  <stat.icon size={16} style={{ color: stat.color }} />
+                  <span className="stat-label" style={{ margin: 0 }}>{stat.label}</span>
+                </div>
+                <p className="stat-value" style={{ color: stat.color, fontSize: typeof stat.value === "number" ? "28px" : "22px" }}>
+                  {stat.value}
+                </p>
+              </div>
+            ))}
+          </motion.div>
         )}
 
         {/* Filters */}
-        <div className="flex gap-2 mb-6 flex-wrap">
+        <motion.div {...fadeIn(0.1)} className="tabs mb-6">
           {["all", "pending", "approved", "rejected", "paid"].map(status => (
             <button
               key={status}
               onClick={() => setFilter(status)}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                filter === status
-                  ? "bg-slate-900 text-white"
-                  : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
-              }`}
+              className={`tab ${filter === status ? "tab-active" : ""}`}
             >
-              {status === "all" ? "All" : STATUS_LABELS[status]}
+              {status === "all" ? "All" : status.charAt(0).toUpperCase() + status.slice(1)}
             </button>
           ))}
-        </div>
+        </motion.div>
 
         {/* Error */}
-        {error && (
-          <div className="mb-4 p-4 bg-red-50 border border-red-200 text-red-700 rounded-lg">
-            {error}
-          </div>
-        )}
+        {error && <div className="alert alert-danger mb-4">{error}</div>}
 
         {/* Expense List */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-          {isLoading ? (
-            <div className="p-8 text-center text-slate-500">
-              <span className="animate-spin inline-block text-2xl mb-2">⏳</span>
-              <p>Loading expenses...</p>
+        {isLoading ? (
+          <div className="flex items-center justify-center py-20">
+            <div className="text-center">
+              <div className="spinner spinner-lg mx-auto mb-3" />
+              <p className="text-sm" style={{ color: "var(--text-muted)" }}>Loading expenses...</p>
             </div>
-          ) : expenses.length === 0 ? (
-            <div className="p-8 text-center text-slate-500">
-              <span className="text-4xl mb-2 block">📭</span>
-              <p className="mb-4">No expenses found</p>
-              <Link
-                to="/app/expenses/new"
-                className="text-indigo-600 hover:text-indigo-700 font-medium"
-              >
-                Submit your first expense →
-              </Link>
-            </div>
-          ) : (
+          </div>
+        ) : expenses.length === 0 ? (
+          <div className="empty-state">
+            <div className="empty-state-icon">📭</div>
+            <div className="empty-state-title">No expenses found</div>
+            <Link to="/app/expenses/new" className="inline-block mt-3 text-sm font-semibold" style={{ color: "var(--accent)" }}>
+              Submit your first expense →
+            </Link>
+          </div>
+        ) : (
+          <motion.div {...fadeIn(0.15)} className="table-container">
             <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-slate-50 border-b border-slate-200">
+              <table>
+                <thead>
                   <tr>
-                    <th className="text-left px-4 py-3 text-sm font-medium text-slate-600">Date</th>
-                    <th className="text-left px-4 py-3 text-sm font-medium text-slate-600">Category</th>
-                    <th className="text-left px-4 py-3 text-sm font-medium text-slate-600">Description</th>
-                    <th className="text-right px-4 py-3 text-sm font-medium text-slate-600">Original Amount</th>
-                    <th className="text-right px-4 py-3 text-sm font-medium text-slate-600">Converted Amount</th>
-                    <th className="text-center px-4 py-3 text-sm font-medium text-slate-600">Status</th>
-                    <th className="text-left px-4 py-3 text-sm font-medium text-slate-600">Current Step</th>
+                    <th>Date</th>
+                    <th>Category</th>
+                    <th>Description</th>
+                    <th style={{ textAlign: "right" }}>Amount</th>
+                    <th>Status</th>
+                    <th>Current Step</th>
+                    <th style={{ textAlign: "right" }}></th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody>
                   {expenses.map(expense => (
                     <tr
                       key={expense.id}
                       onClick={() => navigate(`/app/expenses/${expense.id}`)}
-                      className="hover:bg-slate-50 transition-colors cursor-pointer"
+                      className="cursor-pointer group"
                     >
-                      <td className="px-4 py-3 text-sm text-slate-600">
-                        {formatDate(expense.expense_date)}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
+                      <td>{formatDate(expense.expense_date)}</td>
+                      <td>
+                        <span className="inline-flex items-center gap-2">
                           <span className="text-lg">{CATEGORY_ICONS[expense.category] || "📦"}</span>
-                          <span className="text-sm text-slate-700 capitalize">
-                            {expense.category?.replace("_", " ")}
-                          </span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <p className="text-sm font-medium text-slate-900 truncate max-w-xs">
-                          {expense.merchant_name || expense.description || "Expense"}
-                        </p>
-                        {expense.receipt_url && (
-                          <span className="text-slate-400 text-xs">📎 Receipt attached</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <div className="text-sm">
-                          <p className="font-semibold text-slate-900">
-                            {getCurrencySymbol(expense.original_currency || expense.currency || 'INR')}
-                            {(expense.original_amount || expense.amount || 0).toFixed(2)}
-                          </p>
-                          <p className="text-xs text-slate-500">
-                            {expense.original_currency || expense.currency || 'INR'}
-                          </p>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        {expense.original_currency !== expense.company_currency && expense.converted_amount ? (
-                          <div className="text-sm">
-                            <p className="font-medium text-indigo-700">
-                              {getCurrencySymbol(expense.company_currency || 'INR')}
-                              {expense.converted_amount.toFixed(2)}
-                            </p>
-                            <p className="text-xs text-slate-500">
-                              {expense.company_currency || 'INR'}
-                            </p>
-                          </div>
-                        ) : (
-                          <span className="text-xs text-slate-400">Same currency</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        <span className={`px-2 py-1 text-xs rounded-full font-medium ${STATUS_COLORS[expense.status]}`}>
-                          {STATUS_LABELS[expense.status]}
+                          <span className="capitalize" style={{ color: "var(--text-primary)" }}>{expense.category?.replace(/_/g, " ")}</span>
                         </span>
                       </td>
-                      <td className="px-4 py-3">
+                      <td>
+                        <div className="flex items-center gap-2">
+                          <p className="font-medium truncate max-w-[200px]" style={{ color: "var(--text-primary)" }}>
+                            {expense.merchant_name || expense.description || "Expense"}
+                          </p>
+                          {expense.receipt_url && <Paperclip size={14} style={{ color: "var(--text-muted)", flexShrink: 0 }} />}
+                        </div>
+                      </td>
+                      <td style={{ textAlign: "right" }}>
+                        <p className="font-bold" style={{ color: "var(--text-primary)" }}>
+                          {formatCurrency(expense.amount, expense.currency)}
+                        </p>
+                        {expense.company_currency && expense.currency !== expense.company_currency && expense.converted_amount && (
+                          <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+                            {formatCurrency(expense.converted_amount, expense.company_currency)}
+                          </p>
+                        )}
+                      </td>
+                      <td>
+                        <span className={`badge ${getStatusBadge(expense.status)} capitalize`}>
+                          {expense.status}
+                        </span>
+                      </td>
+                      <td>
                         {expense.status === "pending" && expense.current_approver_name ? (
                           <div>
-                            <p className="text-sm text-slate-700">
-                              Waiting on: <span className="font-medium text-indigo-600">{expense.current_approver_name}</span>
-                            </p>
-                            {expense.current_approver_job_title && (
-                              <p className="text-xs text-slate-500">{expense.current_approver_job_title}</p>
-                            )}
+                            <p className="text-xs" style={{ color: "var(--text-muted)" }}>Waiting on:</p>
+                            <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{expense.current_approver_name}</p>
                           </div>
                         ) : expense.status === "approved" ? (
-                          <span className="text-sm text-green-600 font-medium">Fully Approved</span>
+                          <span className="text-sm font-medium" style={{ color: "var(--success)" }}>Fully Approved</span>
                         ) : expense.status === "rejected" ? (
-                          <span className="text-sm text-red-600 font-medium">Rejected</span>
+                          <span className="text-sm font-medium" style={{ color: "var(--danger)" }}>Rejected</span>
                         ) : expense.status === "paid" ? (
-                          <span className="text-sm text-blue-600 font-medium">Payment Complete</span>
+                          <span className="text-sm font-medium" style={{ color: "var(--accent)" }}>Payment Complete</span>
                         ) : (
-                          <span className="text-sm text-slate-400">-</span>
+                          <span className="text-sm" style={{ color: "var(--text-placeholder)" }}>-</span>
                         )}
+                      </td>
+                      <td style={{ textAlign: "right" }}>
+                        <ArrowRight size={16} style={{ color: "var(--text-placeholder)" }} className="opacity-0 group-hover:opacity-100 transition-opacity -translate-x-2 group-hover:translate-x-0 transform" />
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-          )}
-        </div>
+          </motion.div>
+        )}
       </div>
     </DashboardLayout>
   );
