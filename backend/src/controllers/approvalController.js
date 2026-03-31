@@ -10,20 +10,26 @@ import { notifyApprover, notifyEmployee, notifySpecialApprover } from "./notific
 /**
  * Get pending expenses for approval (Manager/Admin)
  * Returns expenses from team members that are pending approval
+ * CRITICAL: Only shows expenses from same company
  */
 export const getPendingApprovals = async (req, res) => {
   try {
     const userId = req.user.id;
-    const userRole = req.user.user_metadata?.role || req.user.role || "employee";
 
-    // Get user's profile to check role from database
+    // Ensure approver profile exists (used for permission context)
     const { data: profile } = await supabase
       .from("profiles")
       .select("role, company_id")
       .eq("id", userId)
       .single();
 
-    const actualRole = profile?.role || userRole;
+    if (!profile) {
+      return res.status(404).json({ error: "Approver profile not found" });
+    }
+
+    if (!profile.company_id) {
+      return res.status(403).json({ error: "No company assigned to your account" });
+    }
 
     // Get expenses where user is a PENDING approver
     const { data: pendingLogs, error: logsError } = await supabase
@@ -40,7 +46,7 @@ export const getPendingApprovals = async (req, res) => {
       return res.json({ expenses: [] });
     }
 
-    // Get expense details
+    // Get expense details SCOPED TO COMPANY
     const { data: expenses, error: expensesError } = await supabase
       .from("expenses")
       .select(`
@@ -57,9 +63,11 @@ export const getPendingApprovals = async (req, res) => {
         status,
         current_step,
         created_at,
-        employee:employee_id(id, email, role)
+        company_id,
+        employee:employee_id(id, email, role, full_name, job_title)
       `)
       .in("id", expenseIds)
+      .eq("company_id", profile.company_id) // MULTI-TENANCY FILTER
       .eq("status", "pending")
       .order("created_at", { ascending: false });
 
@@ -68,7 +76,8 @@ export const getPendingApprovals = async (req, res) => {
     // Enrich with employee info
     const enrichedExpenses = expenses.map(expense => ({
       ...expense,
-      employee_name: expense.employee?.email?.split("@")[0] || "Unknown",
+      employee_name: expense.employee?.full_name || expense.employee?.email?.split("@")[0] || "Unknown",
+      job_title: expense.employee?.job_title || null,
       user_email: expense.employee?.email || "Unknown"
     }));
 
@@ -81,10 +90,26 @@ export const getPendingApprovals = async (req, res) => {
 
 /**
  * Get approval history (processed by current user)
+ * CRITICAL: Only shows approvals for expenses from same company
  */
 export const getApprovalHistory = async (req, res) => {
   try {
     const userId = req.user.id;
+
+    // Get current user's company_id
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("company_id")
+      .eq("id", userId)
+      .single();
+
+    if (!profile) {
+      return res.status(404).json({ error: "User profile not found" });
+    }
+
+    if (!profile.company_id) {
+      return res.status(403).json({ error: "No company assigned to your account" });
+    }
 
     // Get approval logs where user took action
     const { data: logs, error: logsError } = await supabase
@@ -107,6 +132,7 @@ export const getApprovalHistory = async (req, res) => {
           expense_date,
           status,
           employee_id,
+          company_id,
           employee:employee_id(id, email)
         )
       `)
@@ -117,7 +143,12 @@ export const getApprovalHistory = async (req, res) => {
 
     if (logsError) throw logsError;
 
-    const enrichedApprovals = logs.map(log => ({
+    // Filter logs to only include expenses from same company (MULTI-TENANCY FILTER)
+    const companyFilteredLogs = logs.filter(log => 
+      log.expense?.company_id === profile.company_id
+    );
+
+    const enrichedApprovals = companyFilteredLogs.map(log => ({
       id: log.id,
       expense_id: log.expense_id,
       status: log.action.toLowerCase(),
@@ -201,16 +232,33 @@ export const approveTicket = async (req, res) => {
 
 /**
  * Get all expenses pending for manager approval (legacy compatibility)
+ * CRITICAL: Only shows expenses from same company
  */
 export const getManagerPendingExpenses = async (req, res) => {
   try {
     const userId = req.user.id;
 
-    // Get team members
+    // Get current user's company_id
+    const { data: currentUser } = await supabase
+      .from("profiles")
+      .select("company_id")
+      .eq("id", userId)
+      .single();
+
+    if (!currentUser) {
+      return res.status(404).json({ error: "User profile not found" });
+    }
+
+    if (!currentUser.company_id) {
+      return res.status(403).json({ error: "No company assigned to your account" });
+    }
+
+    // Get team members SCOPED TO COMPANY
     const { data: teamMembers, error: teamError } = await supabase
       .from("profiles")
       .select("id")
-      .eq("manager_id", userId);
+      .eq("manager_id", userId)
+      .eq("company_id", currentUser.company_id); // MULTI-TENANCY FILTER
 
     if (teamError) throw teamError;
 
@@ -220,7 +268,7 @@ export const getManagerPendingExpenses = async (req, res) => {
 
     const teamIds = teamMembers.map(m => m.id);
 
-    // Get pending expenses from team
+    // Get pending expenses from team SCOPED TO COMPANY
     const { data: expenses, error: expensesError } = await supabase
       .from("expenses")
       .select(`
@@ -233,9 +281,11 @@ export const getManagerPendingExpenses = async (req, res) => {
         currency,
         status,
         created_at,
+        company_id,
         employee:employee_id(id, email)
       `)
       .in("employee_id", teamIds)
+      .eq("company_id", currentUser.company_id) // MULTI-TENANCY FILTER
       .eq("status", "pending")
       .order("created_at", { ascending: false });
 
@@ -257,10 +307,26 @@ export const getManagerPendingExpenses = async (req, res) => {
 /**
  * Get special approver queue
  * Returns expenses where this user is a PARALLEL (special) approver
+ * CRITICAL: Only shows expenses from same company
  */
 export const getSpecialApproverQueue = async (req, res) => {
   try {
     const userId = req.user.id;
+
+    // Get current user's company_id
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("company_id")
+      .eq("id", userId)
+      .single();
+
+    if (!profile) {
+      return res.status(404).json({ error: "User profile not found" });
+    }
+
+    if (!profile.company_id) {
+      return res.status(403).json({ error: "No company assigned to your account" });
+    }
 
     // Get expenses where user is a PARALLEL approver with PENDING status
     const { data: pendingLogs, error: logsError } = await supabase
@@ -278,7 +344,7 @@ export const getSpecialApproverQueue = async (req, res) => {
       return res.json({ expenses: [], is_special_approver: false });
     }
 
-    // Get expense details
+    // Get expense details SCOPED TO COMPANY
     const { data: expenses, error: expensesError } = await supabase
       .from("expenses")
       .select(`
@@ -291,12 +357,14 @@ export const getSpecialApproverQueue = async (req, res) => {
         currency,
         converted_amount,
         company_currency,
+        company_id,
         status,
         current_step,
         created_at,
         employee:employee_id(id, email, job_title)
       `)
       .in("id", expenseIds)
+      .eq("company_id", profile.company_id) // MULTI-TENANCY FILTER
       .eq("status", "pending")
       .order("created_at", { ascending: false });
 
