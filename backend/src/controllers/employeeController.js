@@ -50,6 +50,8 @@ export const getEmployees = async (req, res) => {
 
     console.log("[getEmployees] Found employees:", employees?.length);
     console.log("[getEmployees] Query error:", error);
+    console.log("[getEmployees] Employee company_ids:", employees?.map(e => e.company_id));
+    console.log("[getEmployees] Returning employees for company:", currentUser.company_id);
 
     if (error) throw error;
 
@@ -255,6 +257,8 @@ export const createEmployee = async (req, res) => {
       .single();
 
     if (profileError) throw profileError;
+
+    console.log(`[createEmployee] Created employee with company_id: ${profile.company_id} (Admin's company: ${inheritedCompanyId})`);
 
     // Only send password reset email if admin didn't provide a password
     let resetEmailSent = false;
@@ -597,10 +601,12 @@ export const getMyTeam = async (req, res) => {
 
 /**
  * Get current user's profile
+ * CRITICAL: This endpoint is used by frontend to get role AND company_id
  */
 export const getMyProfile = async (req, res) => {
   try {
     const userId = req.user.id;
+    console.log("[getMyProfile] Called for user:", userId);
 
     const { data: profile, error } = await supabase
       .from("profiles")
@@ -608,6 +614,9 @@ export const getMyProfile = async (req, res) => {
         id,
         email,
         role,
+        company_id,
+        full_name,
+        job_title,
         manager_id,
         created_at,
         manager:manager_id (id, email, role)
@@ -615,14 +624,20 @@ export const getMyProfile = async (req, res) => {
       .eq("id", userId)
       .single();
 
+    console.log("[getMyProfile] Query result - profile:", profile);
+    console.log("[getMyProfile] Query result - error:", error);
+
     if (error) throw error;
 
     if (!profile) {
+      console.log("[getMyProfile] No profile found for user:", userId);
       return res.status(404).json({ error: "Profile not found" });
     }
 
+    console.log("[getMyProfile] Returning profile with company_id:", profile.company_id, "role:", profile.role);
     res.json({ employee: profile });
   } catch (err) {
+    console.error("[getMyProfile] Exception:", err);
     res.status(500).json({ error: err.message });
   }
 };
