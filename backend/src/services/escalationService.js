@@ -164,39 +164,58 @@ async function escalateApprovalToAdmin(
 
 /**
  * Set manager on leave (manual trigger by admin)
+ * CRITICAL: companyId parameter ensures cross-company isolation
  */
-export async function setManagerOnLeave(managerId, leaveStartDate, leaveEndDate) {
-  const { error } = await supabase
+export async function setManagerOnLeave(managerId, leaveStartDate, leaveEndDate, companyId) {
+  // CRITICAL: Update ONLY if manager belongs to the specified company
+  const { data: updatedProfile, error } = await supabase
     .from('profiles')
     .update({
       on_leave: true,
       leave_start_date: leaveStartDate,
       leave_end_date: leaveEndDate
     })
-    .eq('id', managerId);
+    .eq('id', managerId)
+    .eq('company_id', companyId) // MULTI-TENANCY FILTER
+    .select()
+    .single();
 
   if (error) {
     throw new Error(`Failed to set manager on leave: ${error.message}`);
   }
 
+  if (!updatedProfile) {
+    throw new Error('Manager not found or not in your company');
+  }
+
   // Immediately escalate all pending approvals for this manager
+  // CRITICAL: Only escalate approvals where the expense belongs to same company
   const { data: pendingApprovals } = await supabase
     .from('approval_logs')
-    .select('id, expense_id, company_id')
+    .select(`
+      id, 
+      expense_id,
+      expense:expense_id (company_id)
+    `)
     .eq('approver_id', managerId)
     .eq('action', 'PENDING')
     .eq('escalated', false);
 
-  if (pendingApprovals && pendingApprovals.length > 0) {
-    console.log(`[Leave] Escalating ${pendingApprovals.length} pending approvals for manager on leave`);
+  // Filter to only approvals for expenses in the same company
+  const companyApprovals = (pendingApprovals || []).filter(
+    approval => approval.expense?.company_id === companyId
+  );
+
+  if (companyApprovals.length > 0) {
+    console.log(`[Leave] Escalating ${companyApprovals.length} pending approvals for manager on leave`);
     
-    for (const approval of pendingApprovals) {
+    for (const approval of companyApprovals) {
       try {
         await escalateApprovalToAdmin(
           approval.id,
           approval.expense_id,
           managerId,
-          approval.company_id,
+          companyId,
           'manager_on_leave',
           0 // Not a timeout
         );
@@ -208,25 +227,34 @@ export async function setManagerOnLeave(managerId, leaveStartDate, leaveEndDate)
 
   return { 
     success: true, 
-    escalated: pendingApprovals?.length || 0 
+    escalated: companyApprovals.length 
   };
 }
 
 /**
  * Remove manager from leave (manual trigger by admin)
+ * CRITICAL: companyId parameter ensures cross-company isolation
  */
-export async function removeManagerFromLeave(managerId) {
-  const { error } = await supabase
+export async function removeManagerFromLeave(managerId, companyId) {
+  // CRITICAL: Update ONLY if manager belongs to the specified company
+  const { data: updatedProfile, error } = await supabase
     .from('profiles')
     .update({
       on_leave: false,
       leave_start_date: null,
       leave_end_date: null
     })
-    .eq('id', managerId);
+    .eq('id', managerId)
+    .eq('company_id', companyId) // MULTI-TENANCY FILTER
+    .select()
+    .single();
 
   if (error) {
     throw new Error(`Failed to remove manager from leave: ${error.message}`);
+  }
+
+  if (!updatedProfile) {
+    throw new Error('Manager not found or not in your company');
   }
 
   return { success: true };
