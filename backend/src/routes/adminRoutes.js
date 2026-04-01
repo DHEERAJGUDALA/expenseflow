@@ -37,15 +37,16 @@ router.post("/fix-data", authenticateUser, async (req, res) => {
 
 /**
  * Get system health check
+ * CRITICAL: Scoped to admin's company only (multi-tenancy enforced)
  */
 router.get("/health", authenticateUser, async (req, res) => {
   try {
     const userId = req.user.id;
 
-    // Verify user is admin
+    // Verify user is admin AND get company_id
     const { data: profile } = await supabase
       .from("profiles")
-      .select("role")
+      .select("role, company_id")
       .eq("id", userId)
       .single();
 
@@ -53,13 +54,18 @@ router.get("/health", authenticateUser, async (req, res) => {
       return res.status(403).json({ error: "Admin access required" });
     }
 
-    // Check data integrity
+    if (!profile.company_id) {
+      return res.status(403).json({ error: "Admin has no company assigned" });
+    }
+
+    // Check data integrity FOR THIS COMPANY ONLY
     const issues = [];
 
-    // Check profiles without company
+    // Check profiles without company (in this company - should be 0)
     const { count: profilesWithoutCompany } = await supabase
       .from("profiles")
       .select("*", { count: 'exact', head: true })
+      .eq("company_id", profile.company_id)
       .is("company_id", null);
 
     if (profilesWithoutCompany > 0) {
@@ -71,10 +77,11 @@ router.get("/health", authenticateUser, async (req, res) => {
       });
     }
 
-    // Check expenses without employee_id
+    // Check expenses without employee_id (scoped to company)
     const { count: expensesWithoutEmployee } = await supabase
       .from("expenses")
       .select("*", { count: 'exact', head: true })
+      .eq("company_id", profile.company_id)
       .is("employee_id", null);
 
     if (expensesWithoutEmployee > 0) {
@@ -86,10 +93,11 @@ router.get("/health", authenticateUser, async (req, res) => {
       });
     }
 
-    // Check expenses without company_id
+    // Check expenses without company_id (should never happen for company-scoped query)
     const { count: expensesWithoutCompany } = await supabase
       .from("expenses")
       .select("*", { count: 'exact', head: true })
+      .eq("company_id", profile.company_id)
       .is("company_id", null);
 
     if (expensesWithoutCompany > 0) {
@@ -101,30 +109,41 @@ router.get("/health", authenticateUser, async (req, res) => {
       });
     }
 
-    // Check companies
-    const { count: companiesCount } = await supabase
+    // Get company info
+    const { data: company } = await supabase
       .from("companies")
-      .select("*", { count: 'exact', head: true });
+      .select("id, name")
+      .eq("id", profile.company_id)
+      .single();
 
-    // Check approval rules
+    // Check approval rules for this company
     const { count: rulesCount } = await supabase
       .from("approval_rules")
-      .select("*", { count: 'exact', head: true });
+      .select("*", { count: 'exact', head: true })
+      .eq("company_id", profile.company_id);
 
-    // Check approval logs
+    // Check approval logs for expenses in this company
     const { count: logsCount } = await supabase
       .from("approval_logs")
-      .select("*", { count: 'exact', head: true });
+      .select(`
+        id,
+        expense:expense_id!inner (company_id)
+      `, { count: 'exact', head: true })
+      .eq("expense.company_id", profile.company_id);
 
     res.json({
       status: issues.length === 0 ? "healthy" : "needs_attention",
       issues,
+      company: {
+        id: company?.id,
+        name: company?.name
+      },
       stats: {
-        companies: companiesCount || 0,
         approvalRules: rulesCount || 0,
         approvalLogs: logsCount || 0,
         issuesFound: issues.length
-      }
+      },
+      message: "Health check scoped to your company only"
     });
   } catch (error) {
     console.error("Error in health check:", error);
@@ -468,14 +487,14 @@ router.get("/audit-logs", authenticateUser, async (req, res) => {
 
 /**
  * GET /api/admin/debug/tenancy
- * Debug endpoint to check multi-tenancy state
- * Shows company distribution of all profiles
+ * Debug endpoint to check multi-tenancy state for admin's OWN company only
+ * CRITICAL: Scoped to admin's company - does NOT show other companies' data
  */
 router.get("/debug/tenancy", authenticateUser, async (req, res) => {
   try {
     const userId = req.user.id;
 
-    // Verify user is admin
+    // Verify user is admin AND get company_id
     const { data: profile } = await supabase
       .from("profiles")
       .select("role, company_id")
@@ -486,52 +505,57 @@ router.get("/debug/tenancy", authenticateUser, async (req, res) => {
       return res.status(403).json({ error: "Admin access required" });
     }
 
-    // Get all companies
-    const { data: companies } = await supabase
-      .from("companies")
-      .select("id, name");
-
-    // Get all profiles with company info
-    const { data: profiles } = await supabase
-      .from("profiles")
-      .select("id, email, role, company_id");
-
-    // Group profiles by company
-    const profilesByCompany = {};
-    const orphanedProfiles = [];
-
-    for (const p of profiles || []) {
-      if (!p.company_id) {
-        orphanedProfiles.push({ id: p.id, email: p.email, role: p.role });
-      } else {
-        if (!profilesByCompany[p.company_id]) {
-          profilesByCompany[p.company_id] = [];
-        }
-        profilesByCompany[p.company_id].push({ id: p.id, email: p.email, role: p.role });
-      }
+    if (!profile.company_id) {
+      return res.status(403).json({ error: "Admin has no company assigned" });
     }
 
-    // Build summary
-    const companySummary = (companies || []).map(c => ({
-      company_id: c.id,
-      company_name: c.name,
-      user_count: profilesByCompany[c.id]?.length || 0,
-      users: profilesByCompany[c.id] || []
-    }));
+    // Get admin's company info
+    const { data: company } = await supabase
+      .from("companies")
+      .select("id, name")
+      .eq("id", profile.company_id)
+      .single();
+
+    // Get profiles ONLY for admin's company (MULTI-TENANCY FILTER)
+    const { data: companyProfiles } = await supabase
+      .from("profiles")
+      .select("id, email, role, company_id")
+      .eq("company_id", profile.company_id);
+
+    // Get orphaned profiles in this company (should be none)
+    const orphanedInCompany = (companyProfiles || []).filter(p => !p.company_id);
+
+    // Build summary for admin's company ONLY
+    const roleCounts = {
+      admin: 0,
+      manager: 0,
+      employee: 0
+    };
+
+    for (const p of companyProfiles || []) {
+      if (roleCounts[p.role] !== undefined) {
+        roleCounts[p.role]++;
+      }
+    }
 
     res.json({
       current_user: {
         id: userId,
         company_id: profile.company_id
       },
-      total_companies: companies?.length || 0,
-      total_profiles: profiles?.length || 0,
-      orphaned_profiles_count: orphanedProfiles.length,
-      orphaned_profiles: orphanedProfiles,
-      companies: companySummary,
-      message: orphanedProfiles.length > 0 
-        ? "WARNING: Some profiles have no company_id!" 
-        : "All profiles have company_id assigned"
+      company: {
+        id: company?.id,
+        name: company?.name
+      },
+      total_profiles_in_company: companyProfiles?.length || 0,
+      role_distribution: roleCounts,
+      profiles: (companyProfiles || []).map(p => ({
+        id: p.id,
+        email: p.email,
+        role: p.role
+      })),
+      orphaned_profiles_count: orphanedInCompany.length,
+      message: "Showing data for your company only (multi-tenancy enforced)"
     });
   } catch (error) {
     console.error("Error in debug/tenancy:", error);
