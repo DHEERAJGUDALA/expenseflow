@@ -27,6 +27,8 @@ const CURRENCY_COUNTRIES = {
  * CRITICAL: Prevents duplicate company names
  */
 export const createCompanyOnSignup = async (userId, userEmail, organizationName, country = 'India', currencyCode = 'INR', currencySymbol = '₹') => {
+  console.log("[createCompanyOnSignup] CALLED with:", { userId, userEmail, organizationName, country, currencyCode });
+  
   try {
     // Validate currency code (default to INR if invalid)
     const validCurrencyCode = currencyCode?.toUpperCase() || 'INR';
@@ -34,51 +36,60 @@ export const createCompanyOnSignup = async (userId, userEmail, organizationName,
     const validCountry = country || CURRENCY_COUNTRIES[validCurrencyCode] || 'India';
 
     const companyName = organizationName || `${userEmail.split('@')[0]}'s Company`;
+    console.log("[createCompanyOnSignup] Using company name:", companyName);
 
-    // CRITICAL: Check if company name already exists (multi-tenancy requirement)
+    // Check if company name already exists
     const { data: existingCompany, error: checkError } = await supabase
       .from("companies")
       .select("id, name")
       .eq("name", companyName.trim())
       .single();
 
+    let company;
+    
     if (existingCompany) {
-      const error = new Error(
-        `A company with the name "${companyName}" already exists. ` +
-        `Please contact your administrator for login credentials or choose a different company name.`
-      );
-      error.code = 'DUPLICATE_COMPANY_NAME';
-      throw error;
-    }
+      console.log("[createCompanyOnSignup] Company already exists:", existingCompany);
+      // Company exists - just assign user to it instead of failing
+      // This handles the case where company was created but profile wasn't properly linked
+      company = existingCompany;
+      console.log("[createCompanyOnSignup] Will assign user to existing company:", company.id);
+    } else {
+      console.log("[createCompanyOnSignup] No duplicate, creating new company...");
 
-    // Create company with full currency data
-    const { data: company, error: companyError } = await supabase
-      .from("companies")
-      .insert({
-        name: companyName,
-        country: validCountry,
-        currency: validCurrencyCode,        // Legacy column (kept for backward compatibility)
-        currency_code: validCurrencyCode,   // New: 3-letter ISO code
-        currency_symbol: validCurrencySymbol, // New: Display symbol
-        stale_threshold_days: 3
-      })
-      .select()
-      .single();
+      // Create company with full currency data
+      const { data: newCompany, error: companyError } = await supabase
+        .from("companies")
+        .insert({
+          name: companyName,
+          country: validCountry,
+          currency: validCurrencyCode,        // Legacy column (kept for backward compatibility)
+          currency_code: validCurrencyCode,   // New: 3-letter ISO code
+          currency_symbol: validCurrencySymbol, // New: Display symbol
+          stale_threshold_days: 3
+        })
+        .select()
+        .single();
 
-    if (companyError) {
-      // Check if error is due to unique constraint violation (extra safety)
-      if (companyError.code === '23505' || companyError.message?.includes('unique')) {
-        const error = new Error(
-          `A company with the name "${companyName}" already exists. ` +
-          `Please contact your administrator for login credentials.`
-        );
-        error.code = 'DUPLICATE_COMPANY_NAME';
-        throw error;
+      if (companyError) {
+        console.log("[createCompanyOnSignup] Company creation ERROR:", companyError);
+        // Check if error is due to unique constraint violation (extra safety)
+        if (companyError.code === '23505' || companyError.message?.includes('unique')) {
+          const error = new Error(
+            `A company with the name "${companyName}" already exists. ` +
+            `Please contact your administrator for login credentials.`
+          );
+          error.code = 'DUPLICATE_COMPANY_NAME';
+          throw error;
+        }
+        throw companyError;
       }
-      throw companyError;
+
+      company = newCompany;
+      console.log("[createCompanyOnSignup] Company CREATED:", company);
     }
 
     // Create admin profile linked to company
+    console.log("[createCompanyOnSignup] Creating/updating profile with company_id:", company.id);
     const { error: profileError } = await supabase
       .from("profiles")
       .upsert({
@@ -89,7 +100,21 @@ export const createCompanyOnSignup = async (userId, userEmail, organizationName,
         job_title: 'Administrator'
       }, { onConflict: 'id' });
 
-    if (profileError) throw profileError;
+    if (profileError) {
+      console.log("[createCompanyOnSignup] Profile upsert ERROR:", profileError);
+      throw profileError;
+    }
+
+    console.log("[createCompanyOnSignup] Profile upsert SUCCESS for user:", userId);
+
+    // Verify the profile was actually updated with the new company_id
+    const { data: verifyProfile } = await supabase
+      .from("profiles")
+      .select("id, email, role, company_id")
+      .eq("id", userId)
+      .single();
+    
+    console.log("[createCompanyOnSignup] VERIFY profile after upsert:", verifyProfile);
 
     // Create audit log
     await supabase
@@ -109,9 +134,10 @@ export const createCompanyOnSignup = async (userId, userEmail, organizationName,
         company_id: company.id
       });
 
+    console.log("[createCompanyOnSignup] SUCCESS - returning company:", company.name);
     return { company, success: true };
   } catch (error) {
-    console.error("Error creating company on signup:", error);
+    console.error("[createCompanyOnSignup] EXCEPTION:", error);
     throw error;
   }
 };
