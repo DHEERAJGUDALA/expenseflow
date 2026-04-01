@@ -13,45 +13,44 @@ const AuthContext = createContext(null);
 // API base URL for direct calls
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3000/api";
 
+// CRITICAL: This is the "Default Company" UUID from database migration
+// Profiles with this company_id are NOT properly set up yet
+const DEFAULT_COMPANY_UUID = '00000000-0000-0000-0000-000000000001';
+
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(null);
   const [user, setUser] = useState(null);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
-  const [isResolving, setIsResolving] = useState(false); // Prevent concurrent resolves
 
   /**
-   * Fetch user profile from database
-   * This is the single source of truth for role
-   * Has 3 second timeout to prevent hanging
+   * Fetch user profile from BACKEND API (not direct Supabase)
+   * This bypasses RLS issues since backend uses service role key
    */
-  const fetchProfile = useCallback(async (authUser) => {
-    if (!authUser) return null;
+  const fetchProfileFromAPI = useCallback(async (accessToken) => {
+    if (!accessToken) return null;
     
-    console.log("[Auth] fetchProfile starting for:", authUser.id);
+    console.log("[Auth] fetchProfileFromAPI starting...");
     
     try {
-      // Add timeout to prevent hanging - reduced to 3 seconds
-      const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error("Profile fetch timeout")), 3000)
-      );
-      
-      const queryPromise = supabase
-        .from("profiles")
-        .select("role, full_name, company_id, job_title")
-        .eq("id", authUser.id)
-        .maybeSingle();
-      
-      const { data, error } = await Promise.race([queryPromise, timeoutPromise]);
+      const response = await fetch(`${API_BASE_URL}/employees/me`, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${accessToken}`
+        }
+      });
 
-      if (error) {
-        console.warn("[Auth] Profile fetch error:", error.message);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        console.warn("[Auth] Profile API error:", response.status, errorData.error);
         return null;
       }
-      
-      console.log("[Auth] fetchProfile completed, data:", data);
-      return data;
+
+      const data = await response.json();
+      console.log("[Auth] Profile from API:", data.employee);
+      return data.employee;
     } catch (err) {
-      console.warn("[Auth] Profile fetch exception:", err.message);
+      console.warn("[Auth] Profile API exception:", err.message);
       return null;
     }
   }, []);
@@ -59,50 +58,42 @@ export function AuthProvider({ children }) {
   /**
    * Setup company for new admin signup
    * Creates company + profile with admin role
-   * Has 5 second timeout to prevent hanging
+   * MUST complete before user can do anything
    */
-  const setupCompanyForNewUser = useCallback(async (authUser) => {
+  const setupCompanyForNewUser = useCallback(async (accessToken, authUser) => {
     if (!authUser?.user_metadata?.organization_name) {
       console.log("[Auth] No organization_name in metadata, skipping company setup");
       return false;
     }
 
     try {
-      const { data: { session: currentSession } } = await supabase.auth.getSession();
-      if (!currentSession?.access_token) {
-        console.warn("[Auth] No session for company setup");
-        return false;
-      }
-
-      console.log("[Auth] Setting up company for new admin...");
-      
-      // Add timeout to prevent hanging if backend is down - 3 seconds max
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3000);
+      console.log("[Auth] Calling POST /api/companies/setup with:", {
+        organizationName: authUser.user_metadata.organization_name,
+        country: authUser.user_metadata.country,
+        currencyCode: authUser.user_metadata.currency_code
+      });
       
       const response = await fetch(`${API_BASE_URL}/companies/setup`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${currentSession.access_token}`
+          "Authorization": `Bearer ${accessToken}`
         },
         body: JSON.stringify({
           organizationName: authUser.user_metadata.organization_name,
           country: authUser.user_metadata.country || "India",
           currencyCode: authUser.user_metadata.currency_code || "INR",
           currencySymbol: authUser.user_metadata.currency_symbol || "₹"
-        }),
-        signal: controller.signal
+        })
       });
-      
-      clearTimeout(timeoutId);
 
       const result = await response.json();
+      console.log("[Auth] Company setup response:", response.status, result);
       
       if (!response.ok) {
-        // User already has a company - this is fine
-        if (result.company_id) {
-          console.log("[Auth] User already has company:", result.company_id);
+        // User already has a REAL company (not the default) - this is fine
+        if (result.company_id && result.company_id !== DEFAULT_COMPANY_UUID) {
+          console.log("[Auth] User already has REAL company:", result.company_id);
           return true;
         }
         console.error("[Auth] Company setup failed:", result.error);
@@ -112,58 +103,63 @@ export function AuthProvider({ children }) {
       console.log("[Auth] Company created successfully:", result.company?.name);
       return true;
     } catch (err) {
-      if (err.name === 'AbortError') {
-        console.warn("[Auth] Company setup timed out (backend may be down)");
-      } else {
-        console.error("[Auth] Company setup exception:", err.message);
-      }
+      console.error("[Auth] Company setup exception:", err.message);
       return false;
     }
   }, []);
 
   /**
-   * Resolve user with profile data
+   * Resolve user with profile data from backend API
    * If profile doesn't exist and user has organization_name, create company first
-   * CRITICAL: This function must NEVER throw - wrap everything in try-catch
    */
-  async function resolveUser(authUser) {
-    // Prevent concurrent resolves
-    if (isResolving) {
-      console.log("[Auth] resolveUser already in progress, skipping");
-      return;
-    }
-    
-    if (!authUser) {
+  async function resolveUser(authUser, accessToken) {
+    if (!authUser || !accessToken) {
       setUser(null);
       return;
     }
 
-    setIsResolving(true);
     console.log("[Auth] Resolving user:", authUser.email);
 
     let profile = null;
     
     try {
-      // First, try to fetch existing profile
-      profile = await fetchProfile(authUser);
+      // First, try to fetch existing profile from backend API
+      profile = await fetchProfileFromAPI(accessToken);
       
-      // If no profile and user has organization_name metadata (new admin signup),
-      // Skip company setup for now - it causes hangs. User will use metadata role.
-      // TODO: Fix company setup flow properly
-      if (!profile && authUser.user_metadata?.organization_name) {
-        console.log("[Auth] No profile found for new admin, using metadata role (admin)");
-        // Company setup will be triggered manually or on next login when profile is fetched successfully
+      console.log("[Auth] Profile from API:", profile);
+      
+      // Check if user needs company setup:
+      // 1. No profile exists, OR
+      // 2. Profile exists but has the default placeholder company_id
+      const needsCompanySetup = !profile || 
+                                 !profile.company_id || 
+                                 profile.company_id === DEFAULT_COMPANY_UUID;
+      
+      const hasOrganizationName = authUser.user_metadata?.organization_name;
+      
+      console.log("[Auth] Needs company setup:", needsCompanySetup, "Has org name:", hasOrganizationName);
+      
+      // If user needs company setup and has organization_name metadata (new admin signup),
+      // create company and profile SYNCHRONOUSLY - user must wait for this
+      if (needsCompanySetup && hasOrganizationName) {
+        console.log("[Auth] Setting up company for new admin...");
+        const companyCreated = await setupCompanyForNewUser(accessToken, authUser);
+        
+        if (companyCreated) {
+          console.log("[Auth] Company created, fetching profile again...");
+          // Small delay to let DB propagate
+          await new Promise(resolve => setTimeout(resolve, 500));
+          profile = await fetchProfileFromAPI(accessToken);
+          console.log("[Auth] Profile after company setup:", profile);
+        }
       }
 
-      console.log("[Auth] Raw DB profile:", profile);
-      console.log("[Auth] Role from DB:", profile?.role);
+      console.log("[Auth] Final profile:", profile);
     } catch (err) {
-      console.error("[Auth] resolveUser error (non-fatal):", err.message);
-      // Continue with null profile - fallback to user_metadata
-    } finally {
-      setIsResolving(false);
+      console.error("[Auth] resolveUser error:", err.message);
     }
 
+    // Build user object - profile data takes priority over metadata
     const resolvedUser = {
       id: authUser.id,
       email: authUser.email,
@@ -174,19 +170,23 @@ export function AuthProvider({ children }) {
       user_metadata: authUser.user_metadata,
     };
 
-    console.log("[Auth] Final user object:", { role: resolvedUser.role, email: resolvedUser.email });
+    console.log("[Auth] Resolved user:", { 
+      email: resolvedUser.email, 
+      role: resolvedUser.role, 
+      company_id: resolvedUser.company_id 
+    });
     setUser(resolvedUser);
   }
 
   /**
-   * Refresh user profile from database
-   * Call this after role changes or when role seems stale
+   * Refresh user profile from backend API
+   * Call this after role changes or when data seems stale
    */
   const refreshProfile = useCallback(async () => {
     const { data: { session: currentSession } } = await supabase.auth.getSession();
-    if (currentSession?.user) {
+    if (currentSession?.user && currentSession?.access_token) {
       console.log("[Auth] Refreshing profile...");
-      await resolveUser(currentSession.user);
+      await resolveUser(currentSession.user, currentSession.access_token);
     }
   }, []);
 
@@ -196,10 +196,7 @@ export function AuthProvider({ children }) {
     async function loadSession() {
       console.log("[Auth] loadSession starting...");
       try {
-        console.log("[Auth] Calling supabase.auth.getSession()...");
-        const {
-          data: { session: activeSession }
-        } = await supabase.auth.getSession();
+        const { data: { session: activeSession } } = await supabase.auth.getSession();
         console.log("[Auth] getSession completed, session exists:", !!activeSession);
 
         if (!isMounted) {
@@ -208,9 +205,12 @@ export function AuthProvider({ children }) {
         }
 
         setSession(activeSession);
-        console.log("[Auth] About to resolveUser...");
-        await resolveUser(activeSession?.user ?? null);
-        console.log("[Auth] resolveUser completed");
+        
+        if (activeSession?.user && activeSession?.access_token) {
+          await resolveUser(activeSession.user, activeSession.access_token);
+        } else {
+          setUser(null);
+        }
       } catch (err) {
         console.error("[Auth] loadSession error:", err);
         if (isMounted) {
@@ -218,7 +218,7 @@ export function AuthProvider({ children }) {
           setUser(null);
         }
       } finally {
-        console.log("[Auth] loadSession finally block, setting isBootstrapping=false");
+        console.log("[Auth] loadSession completed, setting isBootstrapping=false");
         if (isMounted) setIsBootstrapping(false);
       }
     }
@@ -231,11 +231,15 @@ export function AuthProvider({ children }) {
       console.log("[Auth] Auth state changed:", _event);
       try {
         setSession(nextSession);
-        await resolveUser(nextSession?.user ?? null);
+        if (nextSession?.user && nextSession?.access_token) {
+          await resolveUser(nextSession.user, nextSession.access_token);
+        } else {
+          setUser(null);
+        }
       } catch (err) {
-        console.error("[Auth] Fatal error:", err);
+        console.error("[Auth] onAuthStateChange error:", err);
       } finally {
-        console.log("[Auth] onAuthStateChange finally, setting isBootstrapping=false");
+        console.log("[Auth] onAuthStateChange completed, setting isBootstrapping=false");
         setIsBootstrapping(false);
       }
     });
@@ -250,7 +254,7 @@ export function AuthProvider({ children }) {
     session,
     user,
     isBootstrapping,
-    refreshProfile, // Expose profile refresh function
+    refreshProfile,
     signIn: async ({ email, password }) =>
       supabase.auth.signInWithPassword({
         email: normalizeEmail(email),
