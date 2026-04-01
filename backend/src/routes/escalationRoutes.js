@@ -19,10 +19,10 @@ router.post("/manager/:managerId/set-leave", authenticateUser, async (req, res) 
     const { managerId } = req.params;
     const { leave_start_date, leave_end_date } = req.body;
 
-    // Verify admin permission
+    // Verify admin permission AND get company_id
     const { data: profile, error: profileError } = await supabase
       .from("profiles")
-      .select("role")
+      .select("role, company_id")
       .eq("id", req.user.id)
       .single();
 
@@ -32,6 +32,29 @@ router.post("/manager/:managerId/set-leave", authenticateUser, async (req, res) 
 
     if (profile.role !== "admin") {
       return res.status(403).json({ error: "Admin access required" });
+    }
+
+    if (!profile.company_id) {
+      return res.status(403).json({ error: "Admin has no company assigned" });
+    }
+
+    // CRITICAL: Verify target manager belongs to same company
+    const { data: targetManager, error: managerError } = await supabase
+      .from("profiles")
+      .select("id, company_id, role")
+      .eq("id", managerId)
+      .single();
+
+    if (managerError || !targetManager) {
+      return res.status(404).json({ error: "Manager not found" });
+    }
+
+    if (targetManager.company_id !== profile.company_id) {
+      return res.status(403).json({ error: "Cannot modify manager from different company" });
+    }
+
+    if (!["manager", "admin"].includes(targetManager.role)) {
+      return res.status(400).json({ error: "Target user is not a manager or admin" });
     }
 
     // Validate dates
@@ -46,8 +69,8 @@ router.post("/manager/:managerId/set-leave", authenticateUser, async (req, res) 
       return res.status(400).json({ error: "End date must be after start date" });
     }
 
-    // Set manager on leave
-    const result = await setManagerOnLeave(managerId, startDate, endDate);
+    // Set manager on leave (pass company_id for extra safety)
+    const result = await setManagerOnLeave(managerId, startDate, endDate, profile.company_id);
 
     res.json({
       message: "Manager marked on leave successfully",
@@ -68,10 +91,10 @@ router.post("/manager/:managerId/remove-leave", authenticateUser, async (req, re
   try {
     const { managerId } = req.params;
 
-    // Verify admin permission
+    // Verify admin permission AND get company_id
     const { data: profile, error: profileError } = await supabase
       .from("profiles")
-      .select("role")
+      .select("role, company_id")
       .eq("id", req.user.id)
       .single();
 
@@ -83,8 +106,27 @@ router.post("/manager/:managerId/remove-leave", authenticateUser, async (req, re
       return res.status(403).json({ error: "Admin access required" });
     }
 
-    // Remove leave status
-    const result = await removeManagerFromLeave(managerId);
+    if (!profile.company_id) {
+      return res.status(403).json({ error: "Admin has no company assigned" });
+    }
+
+    // CRITICAL: Verify target manager belongs to same company
+    const { data: targetManager, error: managerError } = await supabase
+      .from("profiles")
+      .select("id, company_id")
+      .eq("id", managerId)
+      .single();
+
+    if (managerError || !targetManager) {
+      return res.status(404).json({ error: "Manager not found" });
+    }
+
+    if (targetManager.company_id !== profile.company_id) {
+      return res.status(403).json({ error: "Cannot modify manager from different company" });
+    }
+
+    // Remove leave status (pass company_id for extra safety)
+    const result = await removeManagerFromLeave(managerId, profile.company_id);
 
     res.json({
       message: "Manager leave status removed successfully",
