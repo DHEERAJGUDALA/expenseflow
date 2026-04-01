@@ -31,6 +31,10 @@ router.get("/me", authenticateUser, getCompany);
  */
 router.put("/me", authenticateUser, updateCompany);
 
+// CRITICAL: This is the "Default Company" UUID from database migration
+// New admins get this by default due to column DEFAULT - we must NOT treat it as a real company
+const DEFAULT_COMPANY_UUID = '00000000-0000-0000-0000-000000000001';
+
 /**
  * POST /api/companies/setup
  * Create company during admin signup
@@ -41,35 +45,57 @@ router.post("/setup", authenticateUser, async (req, res) => {
   try {
     const userId = req.user.id;
     const userEmail = req.user.email;
-    const { organizationName, currency } = req.body;
+    const { organizationName, country, currencyCode, currencySymbol } = req.body;
+
+    console.log("[CompanySetup] Request received:", { userId, organizationName, country, currencyCode });
 
     if (!organizationName) {
       return res.status(400).json({ error: "organizationName is required" });
     }
 
-    // Check if user already has a company
+    // Check if user already has a REAL company (not the default placeholder)
     const { data: existingProfile } = await supabase
       .from("profiles")
       .select("company_id")
       .eq("id", userId)
       .single();
 
-    if (existingProfile?.company_id) {
+    console.log("[CompanySetup] Existing profile:", existingProfile);
+
+    // CRITICAL: Allow setup if user has NO company OR has the default placeholder company
+    // The default company (00000000-...) is assigned by database DEFAULT, not a real company
+    const hasRealCompany = existingProfile?.company_id && 
+                           existingProfile.company_id !== DEFAULT_COMPANY_UUID;
+
+    if (hasRealCompany) {
+      console.log("[CompanySetup] User already has real company:", existingProfile.company_id);
       return res.status(400).json({ 
         error: "User already belongs to a company",
         company_id: existingProfile.company_id
       });
     }
 
+    console.log("[CompanySetup] Creating company for user:", organizationName);
+
     // Create company and set up admin profile
-    const result = await createCompanyOnSignup(userId, userEmail, organizationName, currency);
+    // Pass all currency parameters from frontend
+    const result = await createCompanyOnSignup(
+      userId, 
+      userEmail, 
+      organizationName, 
+      country || 'India',
+      currencyCode || 'INR',
+      currencySymbol || '₹'
+    );
+
+    console.log("[CompanySetup] Company created successfully:", result.company?.name);
 
     res.status(201).json({
       message: "Company created successfully",
       company: result.company
     });
   } catch (error) {
-    console.error("Error in company setup:", error);
+    console.error("[CompanySetup] Error:", error);
     res.status(500).json({ error: error.message });
   }
 });
